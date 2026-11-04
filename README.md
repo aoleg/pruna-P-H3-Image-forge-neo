@@ -70,14 +70,14 @@ The P-H3-Image schedule is the model's own sigma grid and ignores Shift; another
 
 ## Editing with P-H3-Image
 
-In img2img, with the P-H3-Image text encoder and VAE selected:
+**Settings → MiniMax H3 → [H3] Enable Reference** (on by default, like Forge's Klein and Krea 2 settings) decides what img2img does. On, it is a P-H3-Image edit, with the P-H3-Image text encoder and VAE selected:
 
 - the input image is `<Picture 1>`, the picture to edit;
 - turn on **ImageStitch Integrated** and add the references to its gallery: `<Picture 2>`, `<Picture 3>`, up to 8 pictures in all;
 - write the instruction and name the pictures ("put the hat from <Picture 2> on the person in <Picture 1>"); a short instruction gets `Edit <Picture 1>. ` in front, an instruction that already starts that way, or an edit brief from Pruna's upsampler, is used as it is;
 - Width and Height set the output; edits work best at about 4 MP (2048×2048, 2368×1760, 2720×1536). Resize mode and Denoising strength are not used: the model generates the whole picture from noise, conditioned on the pictures, each scaled within the output area for the VAE and within 1 MP for the text encoder.
 
-Other H3 models have no edit mode: img2img is refused for them.
+Off, img2img is Forge's own with any H3 model: the input image is encoded, noised at Denoising strength and denoised on the profile's schedule. Other H3 models have no edit mode, so with the setting on img2img is refused for them.
 
 ## Known unknowns
 

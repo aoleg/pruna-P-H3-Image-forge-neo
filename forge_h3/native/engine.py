@@ -114,11 +114,18 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         # reference pictures, (1, h, w, 3) in [0, 1] at their own size, in "<Picture i>" order; set by the script for
         # every generation
         self.references: list[torch.Tensor] = []
+        # standard img2img: Forge's input image is encoded and noised at Denoising strength (the [H3] Enable
+        # Reference setting off); otherwise the input image is <Picture 1> and encode_first_stage is a placeholder
+        self.img2img_input = False
 
     def set_references(self, references) -> None:
         """Called by the script for every generation, before Forge encodes the prompt: (1, h, w, 3) pictures in
         [0, 1], each already within the output area, in "<Picture i>" order."""
         self.references = list(references or ())
+
+    def set_img2img(self, standard: bool) -> None:
+        """Called by the script for every generation: whether Forge's img2img input image starts the sampling."""
+        self.img2img_input = bool(standard)
 
     def condition_images(self) -> list[torch.Tensor]:
         """The pictures the text encoder sees before the prompt as "<Picture i>", each within 1 MP (ComfyUI
@@ -192,10 +199,22 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
 
     @torch.inference_mode()
     def encode_first_stage(self, x: torch.Tensor):
-        # Forge's img2img init hands over the input image; the script refuses img2img before this point, so the
-        # pending error is what reaches the user
+        """Forge's img2img init hands over the input image, resized to the output, [B, 3, H, W] in [-1, 1]. Standard
+        img2img encodes it into the packed latent (the audio stub at zero, as ComfyUI's empty latent) for Forge to
+        noise at Denoising strength; an edit takes the picture elsewhere and gets a placeholder here."""
         raise_pending_error()
-        return torch.zeros((1, 1, 1, 1), device=x.device)
+        if not getattr(self, "img2img_input", False):
+            return torch.zeros((1, 1, 1, 1), device=x.device)
+        height, width = x.shape[-2], x.shape[-1]
+        shapes = still_shapes(width, height)
+        vae = self.forge_objects.vae
+        memory_management.load_models_gpu([vae.patcher], memory_required=encode_memory((1, 3, 1, height, width), vae.vae_dtype))
+        pixels = x[:1].unsqueeze(2).to(vae.device, vae.vae_dtype)  # [1, 3, 1, H, W]
+        video = vae.first_stage_model.encode(pixels).float()
+        if tuple(video.shape) != shapes.video:
+            raise H3Error(f"The H3 VAE encoded the input image to {tuple(video.shape)}, not {shapes.video}")
+        audio = torch.zeros(shapes.audio, dtype=video.dtype, device=video.device)
+        return shapes.pack(video, audio).to(x.device)
 
     @torch.inference_mode()
     def decode_first_stage(self, x: torch.Tensor):

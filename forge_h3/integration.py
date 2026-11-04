@@ -82,14 +82,25 @@ def script_before_process(p):
         print(f"[MiniMax H3] {error}")
 
 
-def validate_img2img(p, components):
-    if components.text_encoder.variant != PH3_IMAGE:
-        raise H3Error(f"{components.profile.label} has no edit mode: img2img needs P-H3-Image (its text encoder and "
-                      "VAE). Use txt2img.")
+REFERENCE_SETTING = "h3_do_reference"
+
+
+def reference_mode() -> bool:
+    """The [H3] Enable Reference setting (Forge's klein_do_reference and the like): on, img2img is an edit with the
+    input image as <Picture 1>; off, img2img is Forge's standard one, the input image noised at Denoising strength."""
+    from modules import shared
+    return bool(getattr(shared.opts, REFERENCE_SETTING, True))
+
+
+def validate_img2img(p, components, reference):
     if not getattr(p, "init_images", None):
-        raise H3Error("Add an input image for P-H3-Image in img2img: it becomes <Picture 1>, the picture to edit.")
+        role = "<Picture 1>, the picture to edit" if reference else "the picture to start from"
+        raise H3Error(f"Add an input image for H3 in img2img: it becomes {role}.")
     if getattr(p, "resize_mode", 0) == LATENT_UPSCALE:
-        raise H3Error("P-H3-Image does not take the latent upscale resize mode. Choose another Resize mode.")
+        raise H3Error("H3 does not take the latent upscale resize mode. Choose another Resize mode.")
+    if reference and components.text_encoder.variant != PH3_IMAGE:
+        raise H3Error(f"{components.profile.label} has no edit mode: references need P-H3-Image (its text encoder "
+                      "and VAE). Turn off [H3] Enable Reference in Settings for standard img2img.")
 
 
 _precision_noted = False
@@ -127,20 +138,28 @@ def _before_process(p):
     overrides = getattr(p, "override_settings", {})
     components = resolve_components(info.filename, module_paths(overrides.get("forge_additional_modules", shared.opts.forge_additional_modules)))
     refs = []
+    p.h3_standard_img2img = False
+    detail = ""
     if isinstance(p, processing.StableDiffusionProcessingImg2Img):
-        validate_img2img(p, components)
-        # the original pictures, each within the output area for the VAE (ComfyUI PH3ImageConditioning); the text
-        # encoder's 1 MP copies are made from these by the engine
-        refs = [pictures.prepare(image, p.width * p.height) for image in pictures.collect(p)]
-        # the model generates the whole picture from noise, conditioned on <Picture 1>: the input image is never noised
-        p.denoising_strength = 1.0
-        p.prompt = pictures.edit_prompt(p.prompt)
+        reference = reference_mode()
+        validate_img2img(p, components, reference)
+        if reference:
+            # the original pictures, each within the output area for the VAE (ComfyUI PH3ImageConditioning); the text
+            # encoder's 1 MP copies are made from these by the engine
+            refs = [pictures.prepare(image, p.width * p.height) for image in pictures.collect(p)]
+            # the model generates the whole picture from noise, conditioned on <Picture 1>: the input image is never noised
+            p.denoising_strength = 1.0
+            p.prompt = pictures.edit_prompt(p.prompt)
+            detail = f", editing <Picture 1> with {len(refs)} pictures"
+        else:
+            # Forge's own img2img: the input image is encoded (engine.encode_first_stage) and noised at Denoising strength
+            p.h3_standard_img2img = True
+            detail = f", img2img at denoising strength {p.denoising_strength:g}"
     request = GenerationRequest(width=p.width, height=p.height, references=len(refs))
     p.h3_request = request
     p.h3_components = components
     p.h3_references = refs
-    edit = f", editing <Picture 1> with {request.references} pictures" if refs else ""
-    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}{edit}")
+    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}{detail}")
 
 
 def process(p):
@@ -157,6 +176,7 @@ def process(p):
     if refs or engine.condition_images():
         p.clear_prompt_cache()
     engine.set_references(refs)
+    engine.set_img2img(getattr(p, "h3_standard_img2img", False))
     if request.references:
         p.extra_generation_params["H3 Edit pictures"] = request.references
 
@@ -184,9 +204,17 @@ def before_sampling(p, noise):
                          seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)
     p.modified_noise = p.rng.next().to(device=noise.device, dtype=noise.dtype)
     if getattr(p, "init_latent", None) is not None:
-        # img2img samples from init_latent at full denoise: the packed start is pure noise
-        import torch
-        p.init_latent = torch.zeros_like(p.modified_noise)
+        if getattr(p, "h3_standard_img2img", False):
+            # standard img2img: Forge noises the encoded input image at Denoising strength
+            if tuple(p.init_latent.shape) != tuple(p.modified_noise.shape):
+                error = H3Error("The img2img input image did not reach H3. Set Settings > VAE > VAE for Encoding to "
+                                "Full, and check the console for an earlier error.")
+                set_pending_error(error)
+                raise error
+        else:
+            # an edit samples from init_latent at full denoise: the packed start is pure noise
+            import torch
+            p.init_latent = torch.zeros_like(p.modified_noise)
     patches.begin_sampling()
 
 

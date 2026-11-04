@@ -63,9 +63,11 @@ Files are recognized by their tensor layout, not by their name.
 4. Set Width and Height: multiples of 32, at least 64. P-H3-Image renders best at about 8 MP (2912×2912 and the sizes in its README) and edits at about 4 MP; chroma-h3 at about 1 MP.
 5. For a fine-tune, add its LoRA to the prompt: `<lora:chroma-h3-comfyui:1>`. On a quantized checkpoint the extension keeps the INT8 matmuls and adds the LoRA as a low-rank term; set **Diffusion in Low Bits** to **Automatic (fp16 LoRA)** if Forge reports it cannot merge the LoRA.
 
-## Editing (P-H3-Image only)
+## img2img
 
-In img2img the input image is `<Picture 1>`; **ImageStitch Integrated**'s gallery holds `<Picture 2>` onwards, 8 pictures in all. The instruction gets `Edit <Picture 1>. ` in front unless it already starts with `Edit <Picture` or `subject_definitions:`. The output is Width × Height; Resize mode and Denoising strength are not used, and the latent-upscale resize mode is refused.
+**Settings → MiniMax H3 → [H3] Enable Reference** is on by default: img2img is a P-H3-Image edit. Off, img2img is Forge's standard one with any H3 model: the input image is encoded and noised at Denoising strength.
+
+With the setting on, the input image is `<Picture 1>`; **ImageStitch Integrated**'s gallery holds `<Picture 2>` onwards, 8 pictures in all. The instruction gets `Edit <Picture 1>. ` in front unless it already starts with `Edit <Picture` or `subject_definitions:`. The output is Width × Height; Resize mode and Denoising strength are not used, and the latent-upscale resize mode is refused.
 
 ## Troubleshooting
 
@@ -78,7 +80,8 @@ In img2img the input image is `<Picture 1>`; **ImageStitch Integrated**'s galler
 | `Unrecognized H3 component` | A selected module is not an H3 or P-H3-Image file. Deselect it. |
 | `H3 width and height must be multiples of 32` | Use multiples of 32, at least 64. |
 | `H3 generates one picture at a time` | Set Batch Size to 1 and use Batch Count. |
-| `MiniMax H3 has no edit mode` | img2img needs P-H3-Image's text encoder and VAE. |
+| `MiniMax H3 has no edit mode` | An edit needs P-H3-Image's text encoder and VAE; turn off **[H3] Enable Reference** for standard img2img. |
+| `The img2img input image did not reach H3` | Set **Settings → VAE → VAE for Encoding** to **Full**. |
 | The process is killed while loading or adding a LoRA | Not enough system RAM. Close other programs, restart Forge before changing the text encoder, and prefer the smaller files. |
 | `Select Script: None for H3 generation` | Generation scripts are not supported. |
 

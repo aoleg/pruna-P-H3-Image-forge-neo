@@ -219,7 +219,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(tuple(self.engine.text_processing_engine_h3.images[0].shape), (1, 736, 1344, 3))
 
     def test_img2img_needs_p_h3_image_an_input_image_and_a_plain_resize(self):
-        with self.assertRaisesRegex(H3Error, "MiniMax H3 has no edit mode"):
+        with self.assertRaisesRegex(H3Error, "MiniMax H3 has no edit mode.*Enable Reference"):
             integration.before_process(Img2Img())
         self.use_ph3()
         with self.assertRaisesRegex(H3Error, "Add an input image"):
@@ -230,6 +230,40 @@ class FlowTests(unittest.TestCase):
             integration.before_process(p)
         with self.assertRaisesRegex(H3Error, "up to 8 pictures"):
             integration.before_process(Img2Img(gallery=[Image.new("RGB", (32, 32))] * 8))
+
+    def test_with_reference_off_img2img_is_forges_own_for_any_h3_model(self):
+        sys.modules["modules.shared"].opts.h3_do_reference = False
+        for ph3 in (False, True):
+            with self.subTest(ph3=ph3):
+                if ph3:
+                    self.use_ph3()
+                p = Img2Img(gallery=[Image.new("RGB", (40, 80), "green")])  # the gallery is not an edit reference now
+                p.prompt = "a bird takes off"
+                cond = self.run_until_sampling(p)
+                self.assertTrue(p.h3_standard_img2img)
+                self.assertEqual((p.h3_request.references, p.denoising_strength, p.prompt), (0, 0.75, "a bird takes off"))
+                self.assertNotIn("H3 Edit pictures", p.extra_generation_params)
+                self.assertEqual((self.engine.references, self.engine.generation.refs), ([], []))
+                # the input image is encoded into the packed latent, the audio stub at zero, and kept for Forge to noise
+                self.assertEqual(tuple(p.init_latent.shape), tuple(p.modified_noise.shape))
+                video, audio = self.engine.generation.shapes.unpack(p.init_latent)
+                self.assertGreater(float(video.abs().sum()), 0.0)
+                self.assertEqual(float(audio.abs().sum()), 0.0)
+                dit = self.engine.forge_objects.unet.model.diffusion_model
+                start = p.init_latent * 0.25 + p.modified_noise * 0.75
+                self.assertTrue(torch.isfinite(dit(start, torch.tensor([750.0]), cond[0].unsqueeze(0))).all())
+        # an input image that did not reach the VAE (another VAE for Encoding) is reported before sampling
+        p = Img2Img()
+        integration.before_process(p)
+        p.sd_model = self.engine
+        integration.process(p)
+        p.init_latent = torch.zeros(1, 4, HEIGHT // 8, WIDTH // 8)
+        with self.assertRaisesRegex(H3Error, "did not reach H3"):
+            integration.before_sampling(p, torch.zeros(1, 4, HEIGHT // 8, WIDTH // 8))
+        # txt2img afterwards starts from noise again
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        self.assertFalse(self.engine.img2img_input)
 
     def test_txt2img_samples_one_packed_still_image(self):
         p = Txt2Img()

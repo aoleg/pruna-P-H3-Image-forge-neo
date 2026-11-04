@@ -8,7 +8,7 @@ ROOT = str(Path(__file__).resolve().parents[1])
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from modules import script_callbacks, scripts
+from modules import script_callbacks, scripts, shared
 
 from forge_h3 import integration, ui
 from forge_h3.native import compat
@@ -60,6 +60,17 @@ class Script(scripts.Script):
         integration.postprocess(p, processed)
 
 
+def settings():
+    # as Forge Neo's klein_do_reference, krea2_do_reference and the like
+    section = ("forge_h3", "MiniMax H3")
+    shared.opts.add_option(integration.REFERENCE_SETTING,
+                           shared.OptionInfo(True, "[H3] Enable Reference", section=section)
+                           .info("enable Edit ; disable img2img")
+                           .info("pin to <b>Quicksettings</b> is recommended if changed often")
+                           .info("Edit needs P-H3-Image"))
+
+
+script_callbacks.on_ui_settings(settings)
 # a rebuilt UI starts with no panels: the ones of a previous build can never bind again
 script_callbacks.on_before_ui(ui.reset)
 script_callbacks.on_after_component(ui.capture)
