@@ -20,10 +20,11 @@ from backend.nn.llm import llama, qwen35
 from backend.nn.llm.llama import Llama2_, Qwen3VL, Qwen3VL_4BConfig
 from backend.nn.llm.qwen35 import Qwen3VLVisionModel
 
+from ..profiles import PH3_IMAGE_HIDDEN_STATES
+
 VISION_KEYS = ("hidden_size", "intermediate_size", "depth", "num_heads", "num_position_embeddings", "deepstack_visual_indexes")
 
-# P-H3-Image: the hidden states the text connector reads (36 = after the final norm), and its output width
-PH3_IMAGE_HIDDEN_STATES = [13, 19, 25, 31, 36]
+# P-H3-Image: the text connector's output width
 PH3_IMAGE_TEXT_DIM = 5120
 PH3_IMAGE_MODEL_TYPE = "qwen3vl_4b"
 

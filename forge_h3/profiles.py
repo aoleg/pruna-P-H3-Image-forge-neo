@@ -5,6 +5,9 @@ from dataclasses import dataclass
 # the ManualSigmas grid of Pruna's workflows: 8 Euler steps at shift 1, no CFG
 PH3_IMAGE_SIGMAS = (1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0)
 PH3_IMAGE_SCHEDULER = "P-H3-Image"
+# the hidden states of the 4B text encoder that Pruna's text connector reads (36 = after the final norm), as Forge's
+# clip wrapper asks the encoder for them
+PH3_IMAGE_HIDDEN_STATES = [13, 19, 25, 31, 36]
 
 
 @dataclass(frozen=True)

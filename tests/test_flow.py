@@ -262,6 +262,12 @@ class FlowTests(unittest.TestCase):
         self.run_until_sampling(p)
         self.assertEqual(p.distilled_cfg_scale, 10.0)
 
+    def test_the_clip_wrapper_asks_p_h3_image_for_its_five_hidden_states(self):
+        from forge_h3.native import text_engine
+        from forge_h3.profiles import PH3_IMAGE_HIDDEN_STATES
+        self.assertEqual(text_engine.tap_layers(types.SimpleNamespace(text_connector=object())), PH3_IMAGE_HIDDEN_STATES)
+        self.assertEqual(text_engine.tap_layers(types.SimpleNamespace()), "last")
+
     def test_set_shift_takes_the_size_newer_forge_passes(self):
         # Forge Neo after d70373e calls set_shift(shift=..., width=..., height=...)
         self.engine.set_shift(shift=10.0, width=WIDTH, height=HEIGHT)

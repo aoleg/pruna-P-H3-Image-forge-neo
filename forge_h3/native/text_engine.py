@@ -10,9 +10,17 @@ from backend.args import dynamic_args
 from backend.text_processing import emphasis
 from backend.text_processing._comfy import EMBEDDINGS, INF, SDClipModel, SDTokenizer
 
+from ..profiles import PH3_IMAGE_HIDDEN_STATES
+
 PAD = 151643
 VISION_START = 151652
 VISION_END = 151653
+
+
+def tap_layers(text_encoder):
+    """What Forge's clip wrapper asks the encoder for: H3 takes the last hidden state, P-H3-Image's text connector
+    the five it was trained on (the wrapper then returns the connector's output)."""
+    return list(PH3_IMAGE_HIDDEN_STATES) if hasattr(text_encoder, "text_connector") else "last"
 
 
 class VisionSpanClipModel(SDClipModel):
@@ -33,8 +41,9 @@ def vision_spans(image_spans) -> list[tuple[int, int]]:
 
 class MiniMaxH3TextEngine:
     def __init__(self, text_encoder, tokenizer):
-        self.text_encoder = VisionSpanClipModel(text_encoder, layer="last", special_tokens={"pad": PAD}, layer_norm_hidden_state=False,
-                                                enable_attention_masks=False, return_attention_masks=False)
+        self.text_encoder = VisionSpanClipModel(text_encoder, layer=tap_layers(text_encoder), special_tokens={"pad": PAD},
+                                                layer_norm_hidden_state=False, enable_attention_masks=False,
+                                                return_attention_masks=False)
         self.tokenizer = SDTokenizer(tokenizer, pad_with_end=False, has_start_token=False, has_end_token=False,
                                      pad_to_max_length=False, max_length=INF, min_length=1, pad_token=PAD)
         # vision block ranges of the last encoded prompt; the pictures come first, so the prompt and the negative
