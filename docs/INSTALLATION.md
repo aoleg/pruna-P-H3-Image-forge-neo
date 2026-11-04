@@ -1,97 +1,88 @@
 # Installation and troubleshooting
 
-Version 0.7.5. MiniMax H3 runs on Forge Neo's own loader, samplers and memory management; the only Python package the extension may install is `imageio-ffmpeg`, when the machine has no FFmpeg. See the [README](../README.md) for the short version, [Performance and Memory](https://github.com/eduardoabreu81/minimax-h3-forge-neo/wiki/Performance-and-Memory) for the measured times and the [wiki](https://github.com/eduardoabreu81/minimax-h3-forge-neo/wiki) for the detailed guides.
+Version 0.8.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
-- **Forge Neo**, `neo` branch. Tested with revision `97b26fb` (2 October 2026, reported as `neo-2.29.2`), Python 3.13, Torch 2.13 with CUDA 13.0 and comfy-kitchen 0.2.36 with its CUDA backend.
-- **FFmpeg** for the MP4 export. If none is on the `PATH`, the extension installs `imageio-ffmpeg` into Forge's Python environment when Forge starts (about 30 MB, internet needed once). To use your own, keep it on the `PATH` or set the full path of the executable in **Settings → MiniMax H3**. Forge started with `--skip-install` installs nothing.
-- **Disk:** about 50 GiB for the four required files.
-- **System RAM:** Forge loads the checkpoint, text encoder and VAEs together, about 50 GiB with the tested files. The A40 test machine had about 50 GB; 15-second clips peaked at 46.3 GiB. Changing the text encoder on a loaded model exceeded it.
-- **GPU:** tested on an NVIDIA A40 (48 GB) and an RTX 4090 (24 GB). On the 4090 every tested set ran 10-second clips without Never OOM; with Kijai's W4A8 checkpoint and Merserk's INT4 text encoder Forge's RSS peaked at 35 GB. A 16 GB card with 32 GB of RAM works with the smaller files; we have not tested cards under 16 GB.
+- **Forge Neo**, `neo` branch. The extension imports and registers against revision `286a244e` (3 November 2026); the native backend was last run on a GPU as the video extension at `97b26fb`. Python 3.13, Torch 2.13 or 2.14 with CUDA, comfy-kitchen 0.2.37 or later with its CUDA backend.
+- **Disk:** about 20 GB for the smallest P-H3-Image set (w4a8 checkpoint, w4a8 text encoder, int8 VAE), 30 GB for the int8 set, 55 GB for bf16. An H3 fine-tune needs an H3 checkpoint, the 32B text encoder and the video VAE, 20 to 50 GB depending on the formats.
+- **System RAM:** Forge loads the checkpoint, text encoder and VAE together. The video extension needed 32 GB of RAM with 16 GB of VRAM and the smaller files; P-H3-Image's files are about half the size of H3's.
 
 ## Install
 
 1. In Forge Neo, open **Extensions → Install from URL**.
-2. Paste `https://github.com/eduardoabreu81/minimax-h3-forge-neo`, click **Install** and restart the WebUI.
+2. Paste `https://github.com/aoleg/pruna-P-H3-Image-forge-neo`, click **Install** and restart the WebUI.
 3. Check the console at startup:
    - `[MiniMax H3] native backend enabled (torch ...)`: ready.
    - `[MiniMax H3] This Forge Neo is too old for the extension...`: the extension changed nothing and stays disabled. Update Forge Neo (`git pull` on the `neo` branch) and restart. The lines below the message list what is missing.
 
-### Upgrading from 0.1.2
+### Coming from minimax-h3-forge-neo
 
-Version 0.1.2 installed a DiffSynth runtime into Forge's environment and needed a processor folder in `models/H3/processor`. Neither is used anymore: the tokenizer ships with the extension. The extension does not uninstall those packages; they do not affect it.
-
-The original MiniMax VAEs used with 0.1.2 still work, so there is no need to download the Comfy-Org VAEs if you have them.
+The video extension and this one register the same model family: keep one of them installed. The audio VAE, FFmpeg and the `H3 FFmpeg executable` setting are no longer used. The `h3` UI preset keeps its name but now holds a still-image recipe; the `ph3` preset is new.
 
 ## Model files
 
-### Tested set
+### P-H3-Image
+
+From [PrunaAI/P-H3-Image-Comfy](https://huggingface.co/PrunaAI/P-H3-Image-Comfy).
 
 | Part | File | Size | Folder |
 | --- | --- | ---: | --- |
-| H3 checkpoint | [minimax_h3_fl2va_pruned_int8_convrot](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/e5eb578a89295337b8ff433a035929ce0279e0b6/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors) | 19.5 GiB | `models/Stable-diffusion` |
-| Text encoder | [qwen3vl_32b_minimax_h3_int8_convrot](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/e5eb578a89295337b8ff433a035929ce0279e0b6/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors) | 25.3 GiB | `models/text_encoder` |
-| Video VAE | [minimax_h3_video_vae_fp16](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_video_vae_fp16.safetensors) | 4.9 GiB | `models/VAE` |
-| Audio VAE | [minimax_h3_audio_vae_fp32](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_audio_vae_fp32.safetensors) | 0.6 GiB | `models/VAE` |
-| Turbo LoRA (optional) | [minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/e5eb578a89295337b8ff433a035929ce0279e0b6/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors) | 1.8 GiB | `models/Lora` |
+| Checkpoint | `diffusion_models/p-h3-image_bf16.safetensors` | 40.5 GB | `models/Stable-diffusion` |
+| | `diffusion_models/p-h3-image_int8_convrot.safetensors` | 21.2 GB | |
+| | `diffusion_models/p-h3-image_w4a8.safetensors` | 13.4 GB | |
+| Text encoder | `text_encoders/p-h3-image_text_encoder_bf16.safetensors` | 9.1 GB | `models/text_encoder` |
+| | `text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors` | 5.1 GB | |
+| | `text_encoders/p-h3-image_text_encoder_w4a8.safetensors` | 3.6 GB | |
+| VAE | `vae/p-h3-image_vae_bf16.safetensors` | 5.6 GB | `models/VAE` |
+| | `vae/p-h3-image_vae_int8_convrot.safetensors` | 3.1 GB | |
+| LoRA for an H3 checkpoint | `loras/p-h3-image_lora_bf16.safetensors` | 2.0 GB | `models/Lora` |
 
-Links point to the Comfy-Org revision `e5eb578`. The text encoder includes the vision weights that first and last frame use.
+The prompt upsampler files (`text_encoders/p-h3-image_prompt_upsampler_*`) are not used.
 
-### Also checked
+The checkpoint has the tensor layout of Comfy-Org's pruned FL2VA files; the extension tells P-H3-Image from H3 by the **text encoder** (Pruna's text connector) and requires the P-H3-Image VAE with it, whose decoder makes one frame per latent. The two parts must be selected together.
 
-| File | Result |
-| --- | --- |
-| Original MiniMax FL2VA [video VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/FL2VA/video_vae/source/model.safetensors) and [audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/FL2VA/audio_vae/model.safetensors) | Work, identical output to the Comfy-Org VAEs. Both are named `model.safetensors` at the source: give them distinct names. |
-| `minimax_h3_fl2va_pruned_w6a8` (14.9 GiB) | Works. |
-| `minimax_h3_fl2va_pruned_fp8_scaled` (19.5 GiB) | Works; slower than INT8 on the A40 (Ampere has no FP8 tensor cores). |
-| `minimax_h3_fl2va_int8_convrot`, the full (not pruned) DiT (31.7 GiB) | Loads in the CPU layout tests; not generated with, since it needs more system RAM. |
-| [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) v4 step600 ema turbo LoRA | Works. |
-| [`fastvideo_fasth3_8step_v2_pruned_int8_convrot`](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy/resolve/main/diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors) (22.1 GB) | Works at 8 steps, Shift 10, with full attention (its VSA sparse attention is not ported yet). |
-| [`minimax_h3_video_vae_int8_convrot`](https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_video_vae_int8_convrot.safetensors) (Kijai) | Works; 47.9 dB PSNR against the fp16 VAE on a test clip. |
-| H3 Eros Max beta5 (Civitai, adult-oriented), INT8 and W4A8 | Work at 8 steps without a LoRA (turbo merged in). |
-| `qwen3vl_32b_minimax_h3_nvfp4_awq` text encoder | **Refused:** it loads in Forge but encodes prompts wrongly (a bird prompt gave a dog). |
-| `minimax_h3_ref2va_*` checkpoints | **Refused:** the reference-to-video mode is not supported yet. |
-| [Kijai W4A8 mixed](https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors) DiT and [Merserk INT4](https://huggingface.co/Merserk/MiniMax-H3-INT4-ConvRot/blob/main/qwen3vl_32b_minimax_h3_int4_convrot.safetensors) text encoder | Work; the recommended pair for 24 GB cards. |
-| tsolful INT4BQ mixed DiT | Works, follows actions less precisely. |
-| Merserk INT4 DiT (also Civitai 2830162) | Loads, quality broken. |
-| GGUF DiTs, Q2_K to Q8_0 (tested: unsloth pruned Q4_K) | Work; slowest format. IQ types are refused. |
-| [unsloth GGUF text encoder](https://huggingface.co/unsloth/MiniMax-H3-GGUF) (tested: `qwen3vl_32b_minimax_h3-Q2_K_M`) | Works, first frame included: the vision part is inside the file. llama.cpp GGUF text encoders, which keep it in a separate file, are refused. |
+### H3 fine-tunes (chroma-h3)
 
-Community files are recognized by their tensor layout, not by their name. A file called H3 on Civitai may still be another architecture or format; the extension says so when it cannot use a file.
+| Part | File | Folder |
+| --- | --- | --- |
+| H3 checkpoint | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/diffusion_models) `minimax_h3_fl2va_*` (pruned, int8, w6a8, fp8), Kijai's W4A8, GGUF Q2_K to Q8_0 | `models/Stable-diffusion` |
+| Text encoder | `qwen3vl_32b_minimax_h3_int8_convrot` (25.3 GiB), Merserk's `qwen3vl_32b_minimax_h3_int4_convrot` (14.9 GiB), unsloth's `qwen3vl_32b_minimax_h3-Q2_K_M.gguf` (12.2 GiB) | `models/text_encoder` |
+| Video VAE | `minimax_h3_video_vae_fp16` (4.9 GiB), Kijai's `minimax_h3_video_vae_int8_convrot`, or MiniMax's original file | `models/VAE` |
+| chroma-h3 | [lodestones/chroma-h3](https://huggingface.co/lodestones/chroma-h3/tree/main/lora) `chroma-h3-comfyui.safetensors` (the fine-tune, strength 1) and `chroma-h3_vspace_dmd8-comfyui.safetensors` (fine-tune plus few-step student, strength 1, 4 or 8 steps at CFG 1) | `models/Lora` |
+
+The NVFP4 AWQ text encoder is refused (it encodes prompts wrongly in Forge Neo). The audio VAE is refused. llama.cpp GGUF text encoders, which keep the vision tower in a separate file, are refused; unsloth's file carries it inside.
+
+Files are recognized by their tensor layout, not by their name.
 
 ## Selecting the components
 
-1. Pick the **h3** UI preset: Res Multistep, Simple, 20 steps, CFG 1, Shift 12.
-2. Select the H3 checkpoint in the checkpoint selector.
-3. Under **VAE / Text Encoder**, select the text encoder, the video VAE and the audio VAE. The **Components** section of the **MiniMax H3** panel lists what was recognized.
-4. Batch Size becomes **Frames**, on the 17n + 5 grid, with the duration next to it.
+1. Pick the UI preset: **ph3** for P-H3-Image, **h3** for an H3 fine-tune. The preset sets sampler, schedule, steps, CFG and Shift; selecting an H3 checkpoint also re-applies the profile's sampler, schedule and CFG, whatever preset is active.
+2. Select the checkpoint in the checkpoint selector.
+3. Under **VAE / Text Encoder**, select the text encoder and the VAE, one of each. The **Components** part of the **MiniMax H3** panel lists what was recognized and which model it is.
+4. Set Width and Height: multiples of 32, at least 64. P-H3-Image renders best at about 8 MP (2912×2912 and the sizes in its README) and edits at about 4 MP; chroma-h3 at about 1 MP.
+5. For a fine-tune, add its LoRA to the prompt: `<lora:chroma-h3-comfyui:1>`. On a quantized checkpoint the extension keeps the INT8 matmuls and adds the LoRA as a low-rank term; set **Diffusion in Low Bits** to **Automatic (fp16 LoRA)** if Forge reports it cannot merge the LoRA.
 
-Outside the h3 preset, the Shift slider belongs to the other preset (for example Distilled CFG) and H3 keeps its shift of 12.
+## Editing (P-H3-Image only)
 
-## First and last frame
-
-- **img2img:** the input image is the first frame, resized by Forge's **Resize mode**. Denoising strength is ignored (H3 always generates the whole clip). The "Just resize (latent upscale)" mode is refused.
-- **Last frame:** turn on **ImageStitch Integrated** and add one image to its gallery; it is cropped to the output size. With more than one image, the first is used.
-- **txt2img + ImageStitch:** last frame only.
-- Still image output does not take keyframes yet.
-
-Checked on the A40: first, last, both, CFG 3, a turbo LoRA and Never OOM. Use 768 on the short side for clean results; see the wiki's [First and Last Frame](https://github.com/eduardoabreu81/minimax-h3-forge-neo/wiki/First-and-Last-Frame) page.
+In img2img the input image is `<Picture 1>`; **ImageStitch Integrated**'s gallery holds `<Picture 2>` onwards, 8 pictures in all. The instruction gets `Edit <Picture 1>. ` in front unless it already starts with `Edit <Picture` or `subject_definitions:`. The output is Width × Height; Resize mode and Denoising strength are not used, and the latent-upscale resize mode is refused.
 
 ## Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |
-| The MiniMax H3 panel does not appear | Select an H3 checkpoint; the panel shows only for H3. If the console says `H3 native controls were not found`, update Forge Neo and restart. |
-| `Select the H3 text encoder / video VAE / audio VAE...` | Select all three components under **VAE / Text Encoder**, and only one of each. |
-| `Unrecognized H3 component` | A selected module is not an H3 file. Deselect it. |
-| `H3 width and height must be multiples of 32` / `H3 Frames must follow 17n + 5` | Use multiples of 32 for the size; the Frames slider moves in steps of 17 from 5 to 362. |
-| `The img2img input image did not reach H3` | Set **Settings → VAE → VAE for Encoding** to **Full** and check the console for an earlier error. |
-| The process is killed while loading H3 or adding a LoRA | Not enough system RAM. Close other programs, restart Forge before changing the text encoder, and for long clips with a LoRA set **Diffusion in Low Bits** to **Automatic (fp16 LoRA)**. |
-| `FFmpeg is missing` / `H3 FFmpeg executable does not exist` | The automatic install did not work (the console says why at startup). Restart Forge with internet access, install FFmpeg, or set the full path of the executable in **Settings → MiniMax H3**. |
-| `Select Script: None for H3 generation` | Generation scripts are not supported with H3 yet. |
+| The MiniMax H3 panel does not appear | Select an H3 or P-H3-Image checkpoint; the panel shows only for them. If the console says `H3 native controls were not found`, update Forge Neo and restart. |
+| `Select the H3 text encoder / VAE...` | Select both components under **VAE / Text Encoder**, one of each. |
+| `The P-H3-Image text encoder needs the P-H3-Image VAE` | The two P-H3-Image parts go together: select `p-h3-image_vae_*`, not the H3 video VAE; and the other way round. |
+| `... is the H3 audio VAE: still images do not use it` | Deselect it. |
+| `Unrecognized H3 component` | A selected module is not an H3 or P-H3-Image file. Deselect it. |
+| `H3 width and height must be multiples of 32` | Use multiples of 32, at least 64. |
+| `H3 generates one picture at a time` | Set Batch Size to 1 and use Batch Count. |
+| `MiniMax H3 has no edit mode` | img2img needs P-H3-Image's text encoder and VAE. |
+| The process is killed while loading or adding a LoRA | Not enough system RAM. Close other programs, restart Forge before changing the text encoder, and prefer the smaller files. |
+| `Select Script: None for H3 generation` | Generation scripts are not supported. |
 
-Report other errors on the [issue tracker](https://github.com/eduardoabreu81/minimax-h3-forge-neo/issues) with the console output.
+Report other errors on the [issue tracker](https://github.com/aoleg/pruna-P-H3-Image-forge-neo/issues) with the console output.
 
 ## Local tests (developers)
 
@@ -100,10 +91,10 @@ python -m unittest discover -s tests -v
 python -m ruff check .
 ```
 
-The native backend tests need Torch and comfy-kitchen; Gradio is optional. They use the real tensor names and shapes of nine published files (`tests/fixtures/h3_headers.json.gz`, no weights) and stand-ins for Forge Neo (`tests/forge_stubs.py`). They do not replace a GPU run.
+The native backend tests need Torch and comfy-kitchen; Gradio is optional. They use the real tensor names and shapes of the published files (`tests/fixtures/h3_headers.json.gz`, no weights) and stand-ins for Forge Neo (`tests/forge_stubs.py`). They do not replace a GPU run.
 
 ## Source provenance
 
-- ComfyUI `e9027f2`: `comfy/ldm/minimax/`, `comfy/text_encoders/minimax.py`, `comfy/model_base.py` (`MiniMaxH3`), `comfy_extras/nodes_minimax_h3.py`.
-- Forge Neo `97b26fb` (GPU tests) and `d70373e` (source reading).
-- Comfy-Org/MiniMax-H3 `e5eb578` and MiniMaxAI/MiniMax-H3 `42ed227` for the model files.
+- ComfyUI `5f415e3` (4 November 2026): `comfy/ldm/minimax/`, `comfy/text_encoders/minimax.py`, `comfy_extras/nodes_minimax_h3.py` (`PH3ImageConditioning`), `comfy/sd.py`; the original port followed `e9027f2`.
+- Forge Neo `286a244e` (import and registration), `97b26fb` and `d70373e` (the video extension's GPU tests and source reading).
+- PrunaAI/P-H3-Image-Comfy and lodestones/chroma-h3, `main` as of 4 November 2026, for the tensor layouts and recipes.
