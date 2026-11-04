@@ -61,6 +61,19 @@ class Img2Img(Txt2Img):
         self.resize_mode, self.denoising_strength = 0, 0.75
 
 
+class FakeUnetPatcher:
+    """Forge's UnetPatcher, as far as a script reserves sampling memory: each clone keeps the memory asked so far."""
+
+    def __init__(self, model, memory=0):
+        self.model, self.extra_preserved_memory_during_sampling = model, memory
+
+    def clone(self):
+        return FakeUnetPatcher(self.model, self.extra_preserved_memory_during_sampling)
+
+    def add_extra_preserved_memory_during_sampling(self, size):
+        self.extra_preserved_memory_during_sampling += size
+
+
 class FakeTextEngine:
     """Records the pictures handed with the prompt; its vision block spans the first three tokens."""
 
@@ -133,7 +146,7 @@ class FlowTests(unittest.TestCase):
         engine.forge_objects = types.SimpleNamespace(
             vae=types.SimpleNamespace(patcher=None, device="cpu", vae_dtype=torch.float32,
                                       first_stage_model=vae.requires_grad_(False)),
-            unet=types.SimpleNamespace(model=types.SimpleNamespace(diffusion_model=dit)),
+            unet=FakeUnetPatcher(types.SimpleNamespace(diffusion_model=dit)),
             clip=types.SimpleNamespace(patcher=None))
         engine.text_processing_engine_h3 = FakeTextEngine()
         engine.is_h3, engine.shift, engine.generation = True, 12.0, None
@@ -184,6 +197,10 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(out).all())
         layout = next(iter(dit._layouts.values()))
         self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "ref_img", "audio", "video"])
+        # the pictures' rows join the sequence the reservation is sized from
+        from forge_h3.native import engine as engine_module
+        self.assertEqual(engine_module.sampling_tokens(self.engine.generation),
+                         6 + 4 + (2 * 8 // 4) + (4 * 2 // 4) + engine_module.TEXT_TOKENS_RESERVED)
         # the next txt2img request drops the pictures
         p = Txt2Img()
         self.run_until_sampling(p)
@@ -224,6 +241,12 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(tuple(p.modified_noise.shape), (1, 1, 1, shapes.size))
         self.assertEqual(p.rng.shape, (1, 1, shapes.size))
         self.assertEqual((self.engine.generation.refs, self.engine.generation.vision_spans), ([], []))
+        # the DiT's working memory is reserved on this generation's copy of the UNet patcher: 24 video rows, 4 audio
+        # rows and the prompt's share
+        from forge_h3.native import engine as engine_module
+        tokens = 6 * 4 // 4 + 4 + engine_module.TEXT_TOKENS_RESERVED
+        self.assertEqual(self.engine.forge_objects.unet.extra_preserved_memory_during_sampling,
+                         tokens * engine_module.SAMPLING_BYTES_PER_TOKEN + engine_module.SAMPLING_FIXED_BYTES)
         # outside the h3 preset the Shift slider belongs to another model: H3 keeps its own
         self.assertEqual(p.distilled_cfg_scale, 3.0)
         # one sampler step through the real DiT, then the decode Forge saves

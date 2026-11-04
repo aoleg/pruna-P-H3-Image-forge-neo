@@ -27,6 +27,38 @@ def encode_memory(shape, dtype) -> int:
     return 6000 * shape[-2] * shape[-1] * memory_management.dtype_size(dtype)
 
 
+# Forge sizes the sampling headroom from the packed latent's element count (about 100k for a 1 MP still, halved
+# again for INT8 models), which left 1.2 GB free next to a resident text encoder on a 32 GB card. The DiT's working
+# memory scales with its sequence instead: fp32 rows, the 28672-wide MLP activations, INT8 activation buffers and
+# the allocator's slack, about 1 MB per token in that run. The reservation below is what Forge keeps free when it
+# loads the DiT for sampling, so the text encoder leaves VRAM (partly or wholly) when the two do not fit together.
+SAMPLING_BYTES_PER_TOKEN = 1536 * 1024
+SAMPLING_FIXED_BYTES = 1024 * 1024 * 1024
+# the prompt's share of the sequence is not known when the reservation is made; a long edit brief is a few hundred
+TEXT_TOKENS_RESERVED = 1024
+# the ViT decoder: one token per 16x16 pixels, a 16384-wide feed-forward and full attention over them
+DECODE_BYTES_PER_TOKEN = 96 * 1024
+DECODE_FIXED_BYTES = 256 * 1024 * 1024
+
+
+def sampling_tokens(generation: "Generation") -> int:
+    """The DiT's sequence length for a generation, the prompt's share estimated."""
+    shapes = generation.shapes
+    _, _, t, h, w = shapes.video
+    rows = t * ((h + 1) // 2) * ((w + 1) // 2) + shapes.audio[2] * shapes.audio[3]
+    rows += sum(((r["latent_h"] + 1) // 2) * ((r["latent_w"] + 1) // 2) for r in generation.refs)
+    return rows + TEXT_TOKENS_RESERVED
+
+
+def sampling_memory(generation: "Generation") -> int:
+    return sampling_tokens(generation) * SAMPLING_BYTES_PER_TOKEN + SAMPLING_FIXED_BYTES
+
+
+def decode_memory(shapes) -> int:
+    _, _, t, h, w = shapes.video
+    return t * h * w * DECODE_BYTES_PER_TOKEN + DECODE_FIXED_BYTES
+
+
 def finite(tensor: torch.Tensor) -> bool:
     """No NaN or Inf: max and min carry them through, without a mask the size of the picture (one sync per call)."""
     return bool(torch.isfinite(tensor.amax()) and torch.isfinite(tensor.amin()))
@@ -108,7 +140,18 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         self.generation = Generation(shapes=shapes, seed=seed, refs=refs,
                                      vision_spans=list(self.text_processing_engine_h3.vision_spans))
         self.forge_objects.unet.model.diffusion_model.generation = self.generation
+        self._reserve_working_memory()
         return (1, 1, shapes.size)
+
+    def _reserve_working_memory(self) -> None:
+        """Forge keeps this much VRAM free when it loads the DiT for sampling, on this generation's copy of the
+        UNet patcher (Forge takes a fresh copy for every generation)."""
+        unet = self.forge_objects.unet.clone()
+        reserved = sampling_memory(self.generation)
+        unet.add_extra_preserved_memory_during_sampling(reserved)
+        self.forge_objects.unet = unet
+        print(f"[MiniMax H3] keeping {reserved / 2**30:.1f} GiB of VRAM free for sampling "
+              f"({sampling_tokens(self.generation)} tokens at most)")
 
     @torch.inference_mode()
     def _encode_images(self, images: list[torch.Tensor]) -> list[torch.Tensor]:
@@ -165,7 +208,8 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         video, _ = generation.shapes.unpack(x[:1].float())
 
         vae = self.forge_objects.vae
-        memory_management.load_model_gpu(vae.patcher)
+        # room for the decoder's activations too, so the DiT or the text encoder make way when they must
+        memory_management.load_models_gpu([vae.patcher], memory_required=decode_memory(generation.shapes))
         pixels = vae.first_stage_model.decode(video.to(vae.device, vae.vae_dtype))  # [1, 3, 1, H, W] in [0, 1]
         if not finite(pixels):
             advice = " Start Forge Neo with --fp32-vae." if vae.vae_dtype != torch.float32 else ""

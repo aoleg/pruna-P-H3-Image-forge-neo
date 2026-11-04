@@ -168,6 +168,12 @@ class MiniMaxH3Model(nn.Module):
         if tags is not None:
             payload["text_token_tags"] = tags
         outputs = []
+        # the first step of a generation reports its working memory, to size engine.sampling_memory from real runs
+        measure = x.is_cuda and not generation.memory_reported
+        if measure:
+            torch.cuda.synchronize(x.device)
+            torch.cuda.reset_peak_memory_stats(x.device)
+            resident = torch.cuda.memory_allocated(x.device)
         # on-the-fly LoRAs keep the INT8 matmuls, with the LoRA as a low-rank term (native/lora.py)
         with lora.low_rank(self):
             for i in range(x.shape[0]):
@@ -175,6 +181,13 @@ class MiniMaxH3Model(nn.Module):
                 v, a = self.forward_streams([video, audio], timestep[i:i + 1], context[i:i + 1],
                                             {**transformer_options, "minimax_h3_item": i}, minimax_payload=payload)
                 outputs.append(shapes.pack(v, a))
+        if measure:
+            torch.cuda.synchronize(x.device)
+            generation.memory_reported = True
+            working = torch.cuda.max_memory_allocated(x.device) - resident
+            tokens = payload["layout"].seq_len
+            print(f"[MiniMax H3] sampling step: {working / 2**30:.2f} GiB of working memory for {tokens} tokens "
+                  f"({working / tokens / 1024:.0f} KiB per token), {resident / 2**30:.1f} GiB resident")
         return torch.cat(outputs)
 
     def _layout(self, text_len, shapes, refs=()):

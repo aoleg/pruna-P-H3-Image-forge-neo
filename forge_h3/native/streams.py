@@ -75,3 +75,4 @@ class Generation:
     # vision block token ranges of the prompt, which the DiT tags as video modality
     vision_spans: list = field(default_factory=list)
     frame: torch.Tensor | None = None  # [1, 3, H, W] float in [0, 1], after decoding
+    memory_reported: bool = False      # the first sampling step printed its working memory
