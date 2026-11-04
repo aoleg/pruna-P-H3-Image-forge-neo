@@ -1,15 +1,17 @@
 # P-H3-Image and MiniMax H3 stills for Forge Neo
 
 [![Forge Neo](https://img.shields.io/badge/Forge-Neo-blue)](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo)
-![Status](https://img.shields.io/badge/Status-Work_in_progress-orange)
+![Status](https://img.shields.io/badge/Status-P--H3--Image_tested-brightgreen)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
 
 An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) that runs the MiniMax H3 architecture as a **still-image model**: Pruna's [P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy) for text-to-image and editing, and H3 fine-tunes such as lodestones' [chroma-h3](https://huggingface.co/lodestones/chroma-h3) through their LoRAs, with the checkpoint selector, presets and Generate button you already know.
 
-> [!Important]
-> **Work in progress.** This is a fork of [minimax-h3-forge-neo](https://github.com/eduardoabreu81/minimax-h3-forge-neo) with everything video and audio removed: no clips, no sound, no FFmpeg, no keyframes, guides or motion control. The still-image path is new and has **not been run on a GPU yet**; the offline tests pass and the extension loads in a current Forge Neo, but treat every picture as a first.
+> [!Note]
+> **A personal note and recommendation, after testing P-H3-Image generation and editing on an RTX 5090.** P-H3-Image is much better as an **edit-and-upscale** model than as a text-to-image model. It is a very good image restoration and upscaling model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds. Text-to-image is rather meh, because small details come out soft. Give it a picture to work from.
 >
-> The extension needs an up-to-date **Forge Neo** (the `neo` branch, with comfy-kitchen 0.2.37 or later). On an older version it stays disabled and tells you so in the console; Forge Neo itself keeps working as usual.
+> **Still untested:** chroma-h3, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+>
+> This is a fork of [minimax-h3-forge-neo](https://github.com/eduardoabreu81/minimax-h3-forge-neo) with everything video and audio removed: no clips, no sound, no FFmpeg, no keyframes, guides or motion control. The extension needs an up-to-date **Forge Neo** (the `neo` branch, with comfy-kitchen 0.2.37 or later). On an older version it stays disabled and tells you so in the console; Forge Neo itself keeps working as usual.
 
 ## What it does
 
@@ -81,9 +83,9 @@ Off, img2img is Forge's own with any H3 model: the input image is encoded, noise
 
 ## Known unknowns
 
-- chroma-h3's own inference layout is not published. The extension runs it as P-H3-Image is run (one latent frame, a two-step audio stub). If that is not how it was trained, the pictures will say so.
+- chroma-h3 and the stock H3 checkpoint with Pruna's LoRA have not been run yet. chroma-h3's own inference layout is not published; the extension runs it as P-H3-Image is run (one latent frame, a two-step audio stub). If that is not how it was trained, the pictures will say so.
 - A lone latent through the stock video VAE is decoded as a chunk of copies, keeping the first real frame, as ComfyUI does now; the earlier rule (decode the latent alone, keep its last frame) may look different.
-- An 8 MP picture is 33k tokens through the 36-block VAE decoder; if it does not fit, the decoder's spatial tiling is still there.
+- P-H3-Image's text-to-image is soft in small detail at every size tried. The sampling path matches ComfyUI's stage by stage, and the launch flags that lower precision made no difference, so the comparison left is the same prompt in ComfyUI.
 
 ## Local tests (developers)
 
