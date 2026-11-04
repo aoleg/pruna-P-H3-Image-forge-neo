@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from test_contracts import AUDIO_VAE, DIT, TE, VIDEO_VAE, checkpoint
+from test_contracts import DIT, TE, VAE, checkpoint
 
 
 @unittest.skipUnless(importlib.util.find_spec("gradio"), "Gradio is optional for CPU tests")
@@ -22,9 +22,7 @@ class GradioSmoke(unittest.TestCase):
         interfaces = []
         for tab in ("txt2img", "img2img"):
             with gr.Blocks() as interface:
-                native = [gr.Slider(1, 8, value=1, elem_id=f"{tab}_batch_size"),
-                          gr.Slider(1, 128, value=1, elem_id=f"{tab}_batch_count"),
-                          gr.Dropdown(["Euler"], value="Euler", elem_id=f"{tab}_sampling"),
+                native = [gr.Dropdown(["Euler"], value="Euler", elem_id=f"{tab}_sampling"),
                           gr.Dropdown(["Simple"], value="Simple", elem_id=f"{tab}_scheduler"),
                           gr.Slider(1, 24, value=1, elem_id=f"{tab}_cfg_scale")]
                 for component in native:
@@ -49,29 +47,16 @@ class GradioSmoke(unittest.TestCase):
         self.assertEqual(len({id(fn.fn) for fn in demo.fns.values()
                               if getattr(fn.fn, "__name__", "") == "update"}), 2)
 
-    def test_panel_labels_are_unique_for_ui_config(self):
-        # Forge's ui_loadsave keys saved values by tab and label (accordions left out): two inputs with one label
-        # share a value, which once turned the second control on by itself
+    def test_the_panel_has_no_generation_inputs(self):
         import gradio as gr
 
         from forge_h3 import ui
         ui.reset()
         self.addCleanup(ui.reset)
         for is_img2img in (False, True):
-            with gr.Blocks() as interface:
+            with gr.Blocks():
                 panel = ui.Panel(is_img2img)
-            labels = []
-
-            def walk(block):
-                if hasattr(block, "children"):
-                    for child in block.children:
-                        walk(child)
-                elif getattr(block, "label", None) is not None:
-                    labels.append(block.label)
-
-            walk(interface)
-            self.assertEqual(sorted({label for label in labels if labels.count(label) > 1}), [])
-            self.assertEqual(panel.preprocessor2.value, ui.CONTROL2_OFF)
+            self.assertEqual(panel.inputs, [])
 
     def test_real_blocks_build_and_model_switching(self):
         import gradio as gr
@@ -81,43 +66,32 @@ class GradioSmoke(unittest.TestCase):
             root = Path(scratch)
             dit = checkpoint(root / "community.safetensors", DIT)
             components = [checkpoint(root / (name + ".safetensors"), tensors)
-                          for name, tensors in (("encoder", TE), ("video", VIDEO_VAE), ("audio", AUDIO_VAE))]
-            processor = root / "processor"
-            processor.mkdir()
-            (processor / "tokenizer_config.json").write_text('{"tokenizer_class":"Qwen2TokenizerFast"}')
-            (processor / "preprocessor_config.json").write_text('{"processor_class":"Qwen3VLProcessor"}')
-            (processor / "tokenizer.json").write_text('{}')
+                          for name, tensors in (("encoder", TE), ("vae", VAE))]
             info = types.SimpleNamespace(filename=str(dit), title="Community", name="Community")
             modules = types.ModuleType("modules")
             # the h3 preset as the user saved it in Settings (issue #5); img2img left at its defaults
             modules.shared = types.SimpleNamespace(opts=types.SimpleNamespace(
-                h3_processor_dir=str(processor), h3_t2i_sampler="Euler", h3_t2i_scheduler="Automatic", h3_t2i_cfg=3.5))
+                h3_t2i_sampler="Euler", h3_t2i_scheduler="Automatic", h3_t2i_cfg=3.5))
             modules.paths = types.SimpleNamespace(models_path=str(root))
             modules.sd_models = types.SimpleNamespace(checkpoint_aliases={"Community": info}, checkpoints_list={"Community": info},
                                                       get_closet_checkpoint_match={"Community": info}.get)
             forge = types.ModuleType("modules_forge")
             forge.main_entry = types.SimpleNamespace(module_list={p.name: str(p) for p in components})
-            presets = types.ModuleType("modules_forge.presets")
-            presets.is_video = lambda preset: 16 if preset == "wan" else 1
-            with patch.dict(sys.modules, {"modules": modules, "modules_forge": forge, "modules_forge.presets": presets}):
+            with patch.dict(sys.modules, {"modules": modules, "modules_forge": forge}):
                 ui.reset()
                 with gr.Blocks() as demo:
                     ckpt = gr.Dropdown(["Regular", "Community"], value="Regular", elem_id="setting_sd_model_checkpoint")
                     mods = gr.Dropdown([p.name for p in components], value=[p.name for p in components], multiselect=True, elem_id="setting_sd_modules")
-                    preset = gr.Dropdown(["sd", "wan"], value="sd", elem_id="forge_ui_preset")
+                    preset = gr.Dropdown(["sd", "h3"], value="sd", elem_id="forge_ui_preset")
                     ui.capture(ckpt)
                     ui.capture(mods)
                     ui.capture(preset)
-                    native = []
                     for tab in ("txt2img", "img2img"):
-                        panel_native = [gr.Slider(1, 8, value=2, step=1, label="Batch Size", elem_id=f"{tab}_batch_size"),
-                                        gr.Slider(1, 128, value=1, step=1, elem_id=f"{tab}_batch_count"),
-                                        gr.Dropdown(["Euler", "DPM++ 2M"], value="DPM++ 2M", elem_id=f"{tab}_sampling"),
+                        panel_native = [gr.Dropdown(["Euler", "DPM++ 2M"], value="DPM++ 2M", elem_id=f"{tab}_sampling"),
                                         gr.Dropdown(["Automatic", "Simple"], value="Automatic", elem_id=f"{tab}_scheduler"),
                                         gr.Slider(1, 24, value=7, elem_id=f"{tab}_cfg_scale")]
                         for component in panel_native:
                             ui.capture(component)
-                        native.append(panel_native)
                         if tab == "txt2img":
                             # Forge's InputAccordion: an accordion and the hidden checkbox Forge reads
                             with gr.Accordion("Hires. fix", elem_id="txt2img_hr") as hires:
@@ -134,41 +108,31 @@ class GradioSmoke(unittest.TestCase):
                 self.assertTrue(all(p.bound for p in ui.PANELS))
                 self.assertTrue(demo.config["dependencies"])
                 fn = next(f.fn for f in demo.fns.values() if getattr(f.fn, "__name__", "") == "update")
-                enter = fn("Community", "Video", [p.name for p in components], {"active": False}, 2, 1, "DPM++ 2M", "Automatic", 7, "sd")
+                # outputs: accordion, status, summary, state, sampler, scheduler, CFG, preset, then the hidden
+                # accordions with their checkboxes
+                enter = fn("Community", [p.name for p in components], {"active": False}, "DPM++ 2M", "Automatic", 7, "sd")
                 self.assertTrue(enter[0]["visible"])
-                self.assertEqual([enter[i]["value"] for i in (11, 12, 13)], ["Euler", "Automatic", 3.5])
+                self.assertIn("encoder.safetensors (plain)", enter[2])
+                self.assertEqual([enter[i]["value"] for i in (4, 5, 6)], ["Euler", "Automatic", 3.5])
                 self.assertEqual(ui.preset_settings("img2img"), ("Res Multistep", "Simple", 1.0))
                 modules.shared.opts.h3_t2i_cfg = 0
                 self.assertIsNone(ui.preset_settings("txt2img")[2])
                 modules.shared.opts.h3_t2i_cfg = 3.5
-                self.assertEqual((enter[9]["label"], enter[9]["value"], enter[9]["step"]), ("Frames", 124, 17))
-                # a Community (FL2VA) checkpoint keeps the Ref2VA reference audio hidden
-                self.assertFalse(enter[8]["visible"])
-                still = fn("Community", "Still image", [p.name for p in components], enter[7], 124, 1, "Euler", "Simple", 1, "sd")
-                self.assertFalse(still[1]["visible"])
-                # the audio shift belongs to the sound: hidden with it for Still image
-                self.assertTrue(enter[2]["visible"])
-                self.assertFalse(still[2]["visible"])
-                # so does the soundtrack choice
-                self.assertTrue(enter[3]["visible"])
-                self.assertFalse(still[3]["visible"])
-                self.assertFalse(still[9]["visible"])
-                leave = fn("Regular", "Video", [], still[7], 124, 1, "Euler", "Simple", 1, "sd")
-                self.assertEqual(leave[9]["value"], 2)
-                self.assertEqual(leave[11]["value"], "DPM++ 2M")
+                # a missing module is reported in the status line
+                partial = fn("Community", [components[0].name], enter[3], "Euler", "Automatic", 3.5, "sd")
+                self.assertIn("Select the H3 VAE", partial[1])
+                leave = fn("Regular", [], partial[3], "Euler", "Simple", 1, "sd")
+                self.assertEqual(leave[4]["value"], "DPM++ 2M")
+                self.assertEqual(leave[6]["value"], 7)
                 self.assertFalse(leave[0]["visible"])
-                enter_wan = fn("Community", "Video", [p.name for p in components], {"active": False}, 129, 1, "Euler", "Simple", 1, "wan")
-                leave_wan = fn("Regular", "Video", [], enter_wan[7], 124, 1, "Euler", "Simple", 1, "wan")
-                self.assertEqual((leave_wan[9]["maximum"], leave_wan[9]["step"], leave_wan[9]["label"]), (241, 16, "Frames"))
-                self.assertEqual(leave_wan[9]["value"], 129)
                 # the UI preset stays free: switching it is how the user leaves H3, and "h3" is a preset of its own
-                self.assertNotIn("interactive", enter_wan[14])
-                self.assertNotIn("interactive", leave_wan[14])
+                self.assertNotIn("interactive", enter[7])
+                self.assertNotIn("interactive", leave[7])
                 # Hires. fix is hidden and turned off with H3, shown again after
-                self.assertEqual((enter[15]["visible"], enter[16]["value"]), (False, False))
-                self.assertEqual((enter[17]["visible"], enter[18]["value"]), (False, False))
-                self.assertTrue(leave[15]["visible"] and leave[17]["visible"])
-                self.assertNotIn("value", leave[16])
+                self.assertEqual((enter[8]["visible"], enter[9]["value"]), (False, False))
+                self.assertEqual((enter[10]["visible"], enter[11]["value"]), (False, False))
+                self.assertTrue(leave[8]["visible"] and leave[10]["visible"])
+                self.assertNotIn("value", leave[9])
                 ui.reset()
 
 

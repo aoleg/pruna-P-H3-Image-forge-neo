@@ -1,7 +1,7 @@
 """Packed-sequence geometry of the MiniMax H3 DiT: patching, positions and the segment table.
 
-Ported from ComfyUI comfy/ldm/minimax/model.py. The packed sequence is
-[text | cond rows | audio | video] for t2va/fl2va and [text | reference blocks | audio | video] for ref2va.
+Ported from ComfyUI comfy/ldm/minimax/model.py. The packed sequence is [text | reference pictures | audio | video];
+the targets are a still image's single latent frame and its audio stub.
 """
 
 import math
@@ -11,16 +11,9 @@ import torch
 FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FRAME_RESCALE = 5.0 / 3.0
 VISUAL_COND_TIMESTEP = 0.999
-AUDIO_COND_TIMESTEP = 1.0
 # the 32B text encoder (text_encoder.py Qwen3VL_32BConfig)
 QWEN_HIDDEN = 5120
 QWEN_INTERMEDIATE = 25600
-
-
-def time_shift_sigma(sigma, from_shift, to_shift):
-    # invert sigma = s*b/(1+(s-1)*b) to the base grid, re-apply the other shift
-    base = sigma / (from_shift + sigma * (1.0 - from_shift))
-    return to_shift * base / (1.0 + (to_shift - 1.0) * base)
 
 
 def pad_to_patch_size(x, patch_size):
@@ -67,16 +60,6 @@ def _axis_from_sqrt_area(dim, patch, sqrt_area):
     return (torch.arange(n, dtype=torch.float64) * (ratio / n) + (1.0 - ratio) / 2.0) * 32.0
 
 
-def mask_row_values(mask, latent_t, lat_h, lat_w):
-    # [T, H, W] denoise mask (1 = generate) -> per-2x2-patch-row float in [0, 1], None when every row fully generates
-    m = torch.nn.functional.pad(mask, (0, lat_w - mask.shape[-1], 0, lat_h - mask.shape[-2]), mode="replicate")
-    m = m.reshape(latent_t, lat_h // 2, 2, lat_w // 2, 2).amax(dim=(2, 4))
-    values = m.reshape(-1)
-    if bool((values >= 1.0 - 1e-3).all()):
-        return None
-    return values
-
-
 def _frame_grid(h, w):
     # area-normalized (h, w) coordinates of one latent frame's 2x2-patch rows
     area = math.sqrt(h * w)
@@ -84,26 +67,10 @@ def _frame_grid(h, w):
     return torch.stack([hh.reshape(-1), ww.reshape(-1)], dim=-1), _axis_from_sqrt_area(w, 2, area)
 
 
-def _video_t_spans(n):
-    return [FRAME_RESCALE * FRAME_PER_TOKEN[k % 5] for k in range(n)]
-
-
 def _video_t_grid(n, origin):
-    # origin + exclusive cumsum
-    spans = torch.tensor(_video_t_spans(n), dtype=torch.float64)
+    # origin + exclusive cumsum of the frame spans
+    spans = torch.tensor([FRAME_RESCALE * FRAME_PER_TOKEN[k % 5] for k in range(n)], dtype=torch.float64)
     return float(origin) + torch.cat([torch.zeros(1, dtype=torch.float64), spans[:-1].cumsum(0)])
-
-
-def _ref_t_span(blk):
-    # time-axis span a reference block occupies ahead of the target streams
-    kind = blk["kind"]
-    if kind == "image":
-        return 1.0
-    if kind == "audio":
-        return float(blk["ref_audio_t"])
-    if kind in ("video", "video_audio"):
-        return max(float(blk["ref_audio_t"]), sum(_video_t_spans(blk["latent_t"])))
-    return 0.0
 
 
 def _audio_grid(cursor, t, w_low, w_high):
@@ -152,30 +119,21 @@ class _Builder:
 class PackedLayout:
     """Static packed-sequence structure for one shape/conditioning signature."""
 
-    def __init__(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes=None, refs=None):
+    def __init__(self, text_len, latent_t, latent_h, latent_w, audio_t, refs=None):
         frame, w_grid = _frame_grid(latent_h, latent_w)
         target_audio_w = (float(w_grid[0]), float(w_grid[-1]))
         b = _Builder(text_len)
 
-        # refs pack between text and the targets, so the target timeline starts after their spans
+        # reference pictures pack between the text and the targets, each on its own grid, one time step apart
+        # (ComfyUI MiniMaxH3ReferenceToVideo's ref_blocks); the target timeline starts after them
         cursor = float(text_len)
         for blk in refs or ():
-            cursor += _ref_t_span(blk)
-
-        # fl2va: keyframe cond rows right after text, sharing the target spatial grid;
-        # anchors count from the target timeline origin, FRAME_RESCALE per pixel frame, 1.0 per audio latent frame
-        for kf in keyframes or ():
-            cond_t = cursor + FRAME_RESCALE * kf["resolved_frame_index"]
-            video_latent = kf.get("latent")
-            if video_latent is not None:
-                b.add("cond", _video_grid(video_latent.shape[2], frame, cond_t), "image", False)
-            audio_latent = kf.get("audio_latent")
-            if audio_latent is not None:
-                b.add("cond_audio", _audio_grid(cond_t, audio_latent.shape[-1], *target_audio_w), "audio", False)
-
-        ref_cursor = float(text_len)
-        for blk in refs or ():
-            ref_cursor = self._add_ref(b, blk, ref_cursor, target_audio_w)
+            r_frame, _ = _frame_grid(blk["latent_h"], blk["latent_w"])
+            g = torch.empty(r_frame.shape[0], 3, dtype=torch.float64)
+            g[:, 0] = cursor
+            g[:, 1:] = r_frame
+            b.add("ref_img", g, "image", False)
+            cursor += 1.0
 
         # target audio then target video, always the last two segments
         b.add("audio", _audio_grid(cursor, audio_t, *target_audio_w), "audio", True)
@@ -188,41 +146,16 @@ class PackedLayout:
         self.audio_pos = torch.cat(b.audio_pos)
         self.audio_update = torch.cat(b.audio_update)
         self.signature = (text_len, latent_t, latent_h, latent_w, audio_t)
-        # contiguous segment table (start, stop, kind); kinds: text / cond / cond_audio / ref_img / ref_audio / audio / video
+        # contiguous segment table (start, stop, kind); kinds: text / ref_img / audio / video
         self.segments = []
         off = 0
         for kind, n in b.segments:
             self.segments.append((off, off + n, kind))
             off += n
 
-    @staticmethod
-    def _add_ref(b, blk, cursor, target_audio_w):
-        kind = blk["kind"]
-        if kind == "image":
-            r_frame, _ = _frame_grid(blk["latent_h"], blk["latent_w"])
-            g = torch.empty(r_frame.shape[0], 3, dtype=torch.float64)
-            g[:, 0] = cursor
-            g[:, 1:] = r_frame
-            b.add("ref_img", g, "image", False)
-            return cursor + 1.0
-        if kind == "audio":
-            rt = blk["ref_audio_t"]
-            if rt > 0:
-                b.add("ref_audio", _audio_grid(cursor, rt, *target_audio_w), "audio", False)
-            return cursor + float(rt)
-        if kind in ("video", "video_audio"):
-            # the block's audio rows pack immediately before its video rows, both sharing the cursor origin
-            rt, vt = blk["ref_audio_t"], blk["latent_t"]
-            r_frame, r_w_grid = _frame_grid(blk["latent_h"], blk["latent_w"])
-            if rt > 0:
-                b.add("ref_audio", _audio_grid(cursor, rt, float(r_w_grid[0]), float(r_w_grid[-1])), "audio", False)
-            b.add("ref_img", _video_grid(vt, r_frame, cursor), "image", False)
-            return cursor + max(float(rt), sum(_video_t_spans(vt)))
-        return cursor
-
 
 def vision_size(height: int, width: int, factor=32, min_pixels=3136, max_pixels=12845056) -> tuple[int, int]:
-    """Qwen's resize of a picture or a frame pair: multiples of patch x merge (32), within the pixel budget."""
+    """Qwen's resize of a picture: multiples of patch x merge (32), within the pixel budget."""
     h_bar, w_bar = round(height / factor) * factor, round(width / factor) * factor
     if h_bar * w_bar > max_pixels:
         beta = math.sqrt((height * width) / max_pixels)
@@ -234,13 +167,11 @@ def vision_size(height: int, width: int, factor=32, min_pixels=3136, max_pixels=
     return h_bar, w_bar
 
 
-def prompt_memory(pictures: list[tuple[int, int]], video_blocks: list[tuple[int, int]]) -> int:
-    """Working memory to keep free for one prompt pass of the 32B encoder, given the (height, width) of each picture
-    and of each two-frame video block: one merged vision token per 32x32 pixels, ~2000 for a 1080x1920 block, and
-    every token carries the bf16 MLP and the fp32 residual stream. A 5 s 1080x1920 reference video makes ~12k tokens,
-    ~4 GB, which the default reserve left short with the DiT still resident (session 11)."""
-    tokens = 1024 + len(video_blocks) * 8  # the prompt text and the time labels
-    for height, width in [*pictures, *video_blocks]:
+def prompt_memory(pictures: list[tuple[int, int]]) -> int:
+    """Working memory to keep free for one prompt pass of the 32B encoder, given the (height, width) of each picture:
+    one merged vision token per 32x32 pixels, and every token carries the bf16 MLP and the fp32 residual stream."""
+    tokens = 1024  # the prompt text
+    for height, width in pictures:
         h_bar, w_bar = vision_size(height, width)
         tokens += h_bar * w_bar // 1024
     return tokens * (QWEN_INTERMEDIATE * 8 + QWEN_HIDDEN * 32)

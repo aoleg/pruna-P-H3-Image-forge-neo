@@ -1,8 +1,5 @@
 """An "h3" UI preset, added at runtime: PresetArch gains a member and the preset's options are registered through
 Forge Neo's own presets.register, so they match every other preset (as in the Qwen-Image 2.1 extension).
-
-Frames are left out on purpose: Forge's video presets step the Frames slider by the frame rate, while H3 needs its
-17n + 5 grid, which the H3 panel sets when an H3 checkpoint is selected.
 """
 
 from enum import Enum
@@ -11,12 +8,12 @@ from modules_forge import presets
 
 PRESET = "h3"
 
-# the base settings of the reference workflows; with the 8-step turbo LoRA, 8 steps (12 for usable speech)
+# the base settings of the reference video workflows, the fallback for a stock H3 checkpoint
 SAMPLER = "Res Multistep"
 SCHEDULER = "Simple"
 STEPS = 20
 CFG = 1.0
-# the video flow shift of the model definition; the 768p turbo LoRA wants 6, FastH3 10
+# the flow shift of the model definition
 SHIFT = 12.0
 
 

@@ -1,4 +1,4 @@
-"""The packed latent of an H3 generation: video [1, 24, T, H/16, W/16] and audio [1, 32, 2, T40] in one tensor.
+"""The packed latent of an H3 still image: video [1, 24, 1, H/16, W/16] and the audio stub [1, 32, 2, 2] in one tensor.
 
 Forge's sampler works on one tensor; ComfyUI packs the two streams the same way (comfy.utils.pack_latents).
 """
@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 
 import torch
 
-from .video_vae import latent_frames
+from ..contracts import AUDIO_LATENTS
 
-FPS = 24
-AUDIO_LATENTS_PER_SECOND = 40
 SPATIAL = 16
+LATENT_CHANNELS = 24
+AUDIO_CHANNELS = 32
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,10 @@ class StreamShapes:
     @property
     def video_size(self) -> int:
         return math.prod(self.video[1:])
+
+    @property
+    def size(self) -> int:
+        return self.video_size + math.prod(self.audio[1:])
 
     def pack(self, video: torch.Tensor, audio: torch.Tensor) -> torch.Tensor:
         # [B, 1, 1, N]: Forge's sampler reads the latent's dims 2 and 3 as an (H, W) area, so it must be 4D
@@ -36,6 +40,11 @@ class StreamShapes:
         return flat[:, :n].reshape(b, *self.video[1:]), flat[:, n:].reshape(b, *self.audio[1:])
 
 
+def still_shapes(width: int, height: int) -> StreamShapes:
+    return StreamShapes(video=(1, LATENT_CHANNELS, 1, height // SPATIAL, width // SPATIAL),
+                        audio=(1, AUDIO_CHANNELS, 2, AUDIO_LATENTS))
+
+
 def text_token_tags(text_len: int, spans) -> torch.Tensor | None:
     """adaLN modality tag of every prompt token: 1 for text, 0 inside the vision blocks; None without images."""
     if not spans:
@@ -47,17 +56,12 @@ def text_token_tags(text_len: int, spans) -> torch.Tensor | None:
 
 
 def preview_frame(packed: torch.Tensor, shapes: StreamShapes | None) -> torch.Tensor:
-    """The middle video frame [1, 24, H/16, W/16] of a packed latent, for Forge's RGB live preview; anything that is
-    not the current generation's packed latent comes back unchanged."""
-    if shapes is None or packed.shape[-1] != shapes.video_size + math.prod(shapes.audio[1:]):
+    """The video frame [1, 24, H/16, W/16] of a packed latent, for Forge's RGB live preview; anything that is not
+    the current generation's packed latent comes back unchanged."""
+    if shapes is None or packed.shape[-1] != shapes.size:
         return packed
     video, _ = shapes.unpack(packed[:1])
-    return video[:, :, video.shape[2] // 2]
-
-
-def stream_shapes(frames: int, width: int, height: int) -> StreamShapes:
-    audio_t = round(frames / FPS * AUDIO_LATENTS_PER_SECOND)
-    return StreamShapes(video=(1, 24, latent_frames(frames), height // SPATIAL, width // SPATIAL), audio=(1, 32, 2, audio_t))
+    return video[:, :, 0]
 
 
 @dataclass
@@ -65,17 +69,9 @@ class Generation:
     """What the transformer and the decoder need for the current request; set by prepare()."""
     shapes: StreamShapes
     seed: int
-    audio_scale: float
-    # FL2VA keyframes: {"resolved_frame_index": pixel frame, "latent": [1, 24, 1, H/16, W/16]}, first frame first
-    keyframes: list = field(default_factory=list)
-    # Ref2VA reference pictures: {"kind": "image", "latent_h", "latent_w", "latent": [1, 24, 1, h, w]}, each at its own
-    # size, in "<Picture i>" order
+    # reference pictures: {"kind": "image", "latent_h", "latent_w", "latent": [1, 24, 1, h, w]}, each at its own size,
+    # in "<Picture i>" order
     refs: list = field(default_factory=list)
     # vision block token ranges of the prompt, which the DiT tags as video modality
     vision_spans: list = field(default_factory=list)
-    # H3's sparse attention for this request (native/sparse.py), when Sparse Attention Integrated is on
-    sparse: object | None = None
-    # the Fun ControlNet runs of this request (fun_control.ControlRun), when the H3 panel's Control has a model and a video
-    controls: list = field(default_factory=list)
-    frames: torch.Tensor | None = None    # [T, 3, H, W] float in [0, 1], after decoding
-    waveform: torch.Tensor | None = None  # [2, samples] float in [-1, 1], after decoding
+    frame: torch.Tensor | None = None  # [1, 3, H, W] float in [0, 1], after decoding

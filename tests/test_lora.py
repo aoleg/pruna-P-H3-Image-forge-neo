@@ -118,14 +118,14 @@ class LowRankTests(unittest.TestCase):
     def test_the_dit_forward_runs_its_loras_as_low_rank_terms(self):
         from test_native import tiny_dit
 
-        from forge_h3.native.streams import Generation, stream_shapes
+        from forge_h3.native.streams import Generation, still_shapes
         model = tiny_dit(17)
         attn = model.blocks[0].attn
         layer = QuantLinear(256, 3 * 256)
         layer.weight.data.copy_(attn.qkv_proj.weight)
         layer.weight_function = [self.lora(3 * 256, 256)]
-        shapes = stream_shapes(frames=22, width=96, height=64)
-        model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0)
+        shapes = still_shapes(width=96, height=64)
+        model.generation = Generation(shapes=shapes, seed=1)
         packed = shapes.pack(torch.randn(shapes.video), torch.randn(shapes.audio))
         context = torch.randn(1, 7, 48)
         with torch.inference_mode():

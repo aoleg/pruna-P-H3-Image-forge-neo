@@ -9,8 +9,9 @@ from pathlib import Path
 from .contracts import H3Error
 
 MAX_HEADER_BYTES = 32 * 1024 * 1024
-ROLE_LABELS = {"dit": "diffusion model", "text_encoder": "text encoder",
-               "video_vae": "video VAE", "audio_vae": "audio VAE"}
+ROLE_LABELS = {"dit": "diffusion model", "text_encoder": "text encoder", "vae": "VAE", "audio_vae": "audio VAE"}
+# what a generation needs under VAE / Text Encoder
+REQUIRED_ROLES = ("text_encoder", "vae")
 
 
 def _unique_pairs(pairs):
@@ -146,7 +147,6 @@ class ModelInfo:
     path: Path
     role: str
     quantization: str
-    variant: str
 
 
 def _role(keys):
@@ -158,7 +158,7 @@ def _role(keys):
             and any("layers.49." in k for k in keys)):
         return "text_encoder"
     if any(k.startswith("decoder.x_embedder.") for k in keys) and any(k.startswith("decoder.register_tokens") for k in keys):
-        return "video_vae"
+        return "vae"
     if {"pre_block.attn.q_bias", "pre_block.attn.v_bias", "pre_block.attn.zero_k_bias"} <= keys:
         return "audio_vae"
     return None
@@ -251,36 +251,24 @@ def inspect_model(path):
                           "H3 cannot load. Select unsloth's qwen3vl_32b_minimax_h3 GGUF or a safetensors H3 text "
                           "encoder, such as qwen3vl_32b_minimax_h3_int8_convrot.")
         return None
-    metadata = json.dumps(header.get("__metadata__", {})).lower()
-    # FastH3 (VSA-trained) carries the sparse-attention gate; repacks may drop its metadata
-    fast = "fasth3" in metadata or "fastvideo" in metadata or "blocks.0.attn.to_gate_compress.weight" in keys
-    variant = "fast" if fast else "standard"
-    if role == "video_vae" and any(k.endswith(".comfy_quant") for k in keys):
-        variant = "quantized"
     if suffix == ".gguf":
-        return ModelInfo(path, role, _gguf_quantization(path, header, role), variant)
-    return ModelInfo(path, role, _quantization(header, keys, path), variant)
+        return ModelInfo(path, role, _gguf_quantization(path, header, role))
+    return ModelInfo(path, role, _quantization(header, keys, path))
 
 
 @dataclass(frozen=True)
 class Components:
     dit: ModelInfo
     text_encoder: ModelInfo
-    video_vae: ModelInfo
-    audio_vae: ModelInfo
+    vae: ModelInfo
 
     @property
     def models(self):
-        return (self.dit, self.text_encoder, self.video_vae, self.audio_vae)
-
-    @property
-    def mode(self):
-        # Ref2VA and FL2VA files have the same tensors and no metadata: the name is the only hint
-        return "ref2va" if "ref2va" in self.dit.path.name.lower() else "fl2va"
+        return (self.dit, self.text_encoder, self.vae)
 
 
 def resolve_components(dit_path, module_paths):
-    """The H3 checkpoint and the three modules selected under VAE / Text Encoder, checked before Forge loads them."""
+    """The H3 checkpoint and the two modules selected under VAE / Text Encoder, checked before Forge loads them."""
     dit = inspect_model(dit_path)
     if dit is None or dit.role != "dit":
         raise H3Error("The selected checkpoint is not a recognized H3 diffusion model.")
@@ -288,14 +276,16 @@ def resolve_components(dit_path, module_paths):
     for path in dict.fromkeys(str(Path(p).resolve()) for p in module_paths):
         item = inspect_model(path)
         if item is None or item.role == "dit":
-            raise H3Error(f"Unrecognized H3 component: {Path(path).name}. Select only the H3 text encoder and both VAEs.")
+            raise H3Error(f"Unrecognized H3 component: {Path(path).name}. Select only the H3 text encoder and VAE.")
+        if item.role == "audio_vae":
+            raise H3Error(f"{Path(path).name} is the H3 audio VAE: still images do not use it. Deselect it.")
         if item.role in resolved:
             raise H3Error(f"More than one H3 {ROLE_LABELS[item.role]} is selected.")
         resolved[item.role] = item
     if "text_encoder" in resolved and resolved["text_encoder"].quantization == "nvfp4":
         # Forge Neo loads it without a warning, but the conditioning comes out wrong (a prompt for a bird gave a dog)
         raise H3Error("The NVFP4 AWQ text encoder does not encode prompts correctly in Forge Neo yet. Select qwen3vl_32b_minimax_h3_int8_convrot or the bf16 text encoder.")
-    for role in ("text_encoder", "video_vae", "audio_vae"):
+    for role in REQUIRED_ROLES:
         if role not in resolved:
             raise H3Error(f"Select the H3 {ROLE_LABELS[role]} in Forge's VAE / Text Encoder field.")
     return Components(**resolved)

@@ -10,8 +10,8 @@ from . import detect as detection
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huggingface", "MiniMax-H3")
 
-VIDEO_SHIFT = 12.0
-AUDIO_SHIFT = 3.0
+# the flow shift of the model definition, for both streams
+SHIFT = 12.0
 
 
 class MiniMaxH3Latent(LatentFormat):
@@ -33,7 +33,7 @@ class MiniMaxH3Latent(LatentFormat):
 
     def latent_rgb_factors_reshape(self, sample):
         # Forge's RGB live preview (sd_vae_approx.cheap_approximation) reshapes the latent first: the packed
-        # video+audio latent becomes the middle video frame of the generation being sampled
+        # video+audio latent becomes the video frame of the picture being sampled
         from modules import shared
 
         from .streams import preview_frame
@@ -47,8 +47,8 @@ class MiniMaxH3(BASE):
 
     unet_config = {"image_model": "minimax_h3"}
 
-    # discrete flow, timestep = sigma * 1000 as the DiT expects; the audio stream derives its own shift from the video sigma
-    sampling_settings = {"shift": VIDEO_SHIFT, "multiplier": 1000, "audio_shift": AUDIO_SHIFT}
+    # discrete flow, timestep = sigma * 1000 as the DiT expects
+    sampling_settings = {"shift": SHIFT, "multiplier": 1000}
 
     # ComfyUI's 0.114 under its 0.01 MB/element estimate; Forge Neo's KModel uses 0.02
     memory_usage_factor = 0.057

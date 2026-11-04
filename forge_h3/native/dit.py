@@ -1,8 +1,8 @@
-"""MiniMax H3 audio-video DiT layers for Forge Neo.
+"""MiniMax H3 DiT layers for Forge Neo.
 
 Ported from ComfyUI comfy/ldm/minimax/model.py (see native.COMFYUI_COMMIT). Single-stream packed-token
-transformer denoising video (24ch, patch 1x2x2) and stereo audio (32ch, 40 Hz) latents jointly, conditioned on
-Qwen3-VL layer-50 hidden states. The model itself is in transformer.py.
+transformer denoising video (24ch, patch 1x2x2) and audio (32ch) latents jointly, conditioned on Qwen3-VL hidden
+states. The model itself is in transformer.py.
 
 Layers are plain torch modules: inside Forge's using_forge_operations they become Forge operations (dtype,
 quantization, offload, LoRA), outside it they stay torch modules for CPU tests. ComfyUI's prefetch queue, block
@@ -14,11 +14,10 @@ import math
 import torch
 import torch.nn as nn
 
-from . import kernels, sparse
-from .layout import time_shift_sigma
+from . import kernels
 
 # modality tags of the adaLN rows: each timestep has three rows (video, text, audio)
-SEGMENT_TAG = {"text": 1, "video": 0, "audio": 2, "cond": 0, "ref_img": 0, "cond_audio": 2, "ref_audio": 2}
+SEGMENT_TAG = {"text": 1, "video": 0, "audio": 2, "ref_img": 0}
 
 
 class TimeEmbedder(nn.Module):
@@ -62,12 +61,6 @@ class Attention(nn.Module):
             self.to_gate_compress = nn.Linear(hidden, inner, bias=False, dtype=dtype, device=device)
 
     def forward(self, x, rope_freqs=None, transformer_options=None):
-        sparse_attention = (transformer_options or {}).get("minimax_h3_sparse")
-        if sparse_attention is not None:
-            # H3's own sparse path (native/sparse.py) replaces Forge's Sparse Attention Integrated override
-            if sparse_attention.eligible(self, x, rope_freqs, transformer_options):
-                return sparse_attention.attention(self, x, rope_freqs, transformer_options)
-            transformer_options = sparse.dense_options(transformer_options)
         s = x.shape[0]
         q, k, v = self.qkv_proj(x).split(self.heads * self.head_dim, dim=-1)
         v = v.view(s, self.heads, self.head_dim)
@@ -195,8 +188,8 @@ class FinalLayer(nn.Module):
         self.video_out = nn.Linear(hidden, video_dim, bias=True, dtype=torch.float32, device=device)
         self.audio_out = nn.Linear(hidden, audio_dim, bias=True, dtype=torch.float32, device=device)
 
-    def forward(self, x, t_emb, video_seg, audio_seg, sigma, sample_sigmas, shifts):
-        # video_seg / audio_seg: (start, stop, row) of the target streams, where row is a mod-row index or a per-token blend
+    def forward(self, x, t_emb, video_seg, audio_seg):
+        # video_seg / audio_seg: (start, stop, row) of the target streams, where row is a mod-row index
         shift, scale = self.adaln_proj(t_emb)
 
         def mod(seg):
@@ -204,56 +197,4 @@ class FinalLayer(nn.Module):
             out = self.norm(x[a:b]) * (1.0 + _mod_row(scale, row, scale.dtype)) + _mod_row(shift, row, shift.dtype)
             return out.to(torch.float32)
 
-        # a PDD LoRA bank stacks n heads in the rows of the output projection: in the weight once Forge merged the
-        # LoRA into it, otherwise in the reshape of the patch it applies at every call
-        n = head_count(self.video_out, self.video_dim)
-        if n == 1:
-            return self.video_out(mod(video_seg)), self.audio_out(mod(audio_seg))
-
-        # PDD head bank: row block 0 is a full head, later blocks are offsets from it;
-        # a step consumes the dt-weighted mean of the heads it spans
-        if sample_sigmas is None:
-            raise ValueError("MiniMax H3 PDD heads need the sampler's sigma schedule")
-        i = int((sample_sigmas - sigma).abs().argmin())
-        sigma_next = sample_sigmas[min(i + 1, sample_sigmas.shape[0] - 1)]
-        start, stop = (round(float(1.0 - time_shift_sigma(s, shifts[0], 1.0)) * n) for s in (sigma, sigma_next))
-        start = min(start, n - 1)
-        stop = max(stop, start + 1)
-        return (_pdd_head(self.video_out, mod(video_seg), n, start, stop, shifts[0]),
-                _pdd_head(self.audio_out, mod(audio_seg), n, start, stop, shifts[1]))
-
-
-def bank_size(patches, out_dim):
-    """The heads a LoRA's reshape_weight gives an output projection of out_dim rows (a PDD head bank, Kijai's
-    ComfyUI conversion of alibaba-pai's Acc LoRAs); 1 without one. patches: Forge's (strength, adapter, ...) tuples."""
-    n = 1
-    for patch in patches:
-        weights = getattr(patch[1], "weights", None)
-        reshape = weights[5] if weights is not None and len(weights) > 5 else None
-        if reshape:
-            n = max(n, int(reshape[0]) // out_dim)
-    return n
-
-
-def head_count(layer, out_dim):
-    """The PDD heads of an output projection: from its weight when the LoRA is merged into it, otherwise from the
-    patches Forge merges at every call (Automatic (fp16 LoRA), or a low-VRAM load)."""
-    n = layer.weight.shape[0] // out_dim
-    for function in getattr(layer, "weight_function", None) or ():
-        if hasattr(function, "patch"):      # OnlineLoRAPatch
-            n = max(n, bank_size(function.patch, out_dim))
-        elif hasattr(function, "patches"):  # LowVramPatch
-            n = max(n, bank_size(function.patches.get(function.key, ()), out_dim))
-    return n
-
-
-def _pdd_head(head, h, n, start, stop, flow_shift):
-    grid = torch.linspace(1.0, 0.0, n + 1, dtype=torch.float64)
-    dt = (1.0 - flow_shift * grid / (1.0 + (flow_shift - 1.0) * grid)).diff()[start:stop]
-    w = (dt / dt.sum()).to(h)
-    with kernels.weight_and_bias(head, h) as (weight, bias):
-        rows = weight.reshape(n, -1, weight.shape[1])
-        brows = bias.reshape(n, -1)
-        first = max(start, 1)
-        return nn.functional.linear(h, rows[0] + torch.einsum("n,noi->oi", w[first - start:], rows[first:stop]),
-                                    brows[0] + torch.einsum("n,no->o", w[first - start:], brows[first:stop]))
+        return self.video_out(mod(video_seg)), self.audio_out(mod(audio_seg))

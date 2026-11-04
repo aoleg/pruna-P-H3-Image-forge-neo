@@ -72,47 +72,34 @@ class CheckpointLayoutTests(unittest.TestCase):
         from forge_h3.native.detect import detect
         self.assertIsNone(detect(self.headers["minimax_h3_video_vae_fp16"]))
 
-    def test_comfy_org_vaes_match(self):
-        from forge_h3.native.audio_vae import MiniMaxH3AudioVAE
+    def test_comfy_org_vae_matches(self):
         from forge_h3.native.video_vae import MiniMaxH3VideoVAE
-        for name, cls in (("minimax_h3_video_vae_fp16", MiniMaxH3VideoVAE), ("minimax_h3_audio_vae_fp32", MiniMaxH3AudioVAE)):
-            with self.subTest(name), torch.device("meta"):
-                self.assertEqual(layout_problems(cls(), self.headers[name]), [])
+        with torch.device("meta"):
+            self.assertEqual(layout_problems(MiniMaxH3VideoVAE(), self.headers["minimax_h3_video_vae_fp16"]), [])
 
-    def test_original_minimax_vaes_convert_to_the_same_layout(self):
+    def test_original_minimax_vae_converts_to_the_same_layout(self):
         from forge_h3.native import vae
         video = vae.convert_video_vae(meta_state_dict(self.headers["minimax_original_video_vae"]))
-        audio = vae.convert_audio_vae(meta_state_dict(self.headers["minimax_original_audio_vae"]))
-        for converted, reference in ((video, "minimax_h3_video_vae_fp16"), (audio, "minimax_h3_audio_vae_fp32")):
-            expected = {k: tuple(v["shape"]) for k, v in self.headers[reference].items() if k != "__metadata__"}
-            self.assertEqual({k: tuple(v.shape) for k, v in converted.items()}, expected)
+        expected = {k: tuple(v["shape"]) for k, v in self.headers["minimax_h3_video_vae_fp16"].items() if k != "__metadata__"}
+        self.assertEqual({k: tuple(v.shape) for k, v in video.items()}, expected)
 
     def test_vae_roles_are_recognized(self):
         from forge_h3.native import vae
         for name in ("minimax_h3_video_vae_fp16", "minimax_original_video_vae"):
             self.assertTrue(vae.is_video_vae(self.headers[name]))
-        for name in ("minimax_h3_audio_vae_fp32", "minimax_original_audio_vae"):
-            self.assertTrue(vae.is_audio_vae(self.headers[name]))
-        self.assertEqual(vae.video_layers(self.headers["minimax_h3_video_vae_fp16"], prefix=""), 36)
+            self.assertFalse(vae.is_audio_vae(self.headers[name]))
+        self.assertTrue(vae.is_audio_vae({"pre_block.attn.zero_k_bias": None}))
+        self.assertEqual(vae.video_layers(self.headers["minimax_h3_video_vae_fp16"]), 36)
 
 
 @unittest.skipIf(torch is None, "needs torch and comfy-kitchen")
 class ConversionTests(unittest.TestCase):
-    def test_weight_norm_folding_matches_torch(self):
+    def test_quantized_vae_keeps_its_quantization(self):
         from forge_h3.native import vae
-        conv = torch.nn.utils.parametrizations.weight_norm(torch.nn.Conv1d(4, 6, 3))
-        g = conv.parametrizations.weight.original0.detach()
-        v = conv.parametrizations.weight.original1.detach()
-        folded = vae.convert_audio_vae({"x.weight_g": g, "x.weight_v": v, "x.bias": conv.bias.detach()})
-        self.assertTrue(torch.allclose(folded["x.weight"], conv.weight.detach(), atol=1e-6))
-        self.assertEqual(sorted(folded), ["latents_mean", "latents_std", "x.bias", "x.weight"])
-
-    def test_quantized_video_vae_keeps_its_quantization(self):
-        from forge_h3.native import vae
-        sd = {"video.decoder.blocks.0.attn.to_qkv.comfy_quant": torch.zeros(1),
-              "video.decoder.blocks.0.attn.to_qkv.weight_scale": torch.ones(1)}
-        self.assertTrue(vae.is_quantized(sd, "video."))
-        self.assertFalse(vae.is_quantized(sd, "audio."))
+        sd = {"decoder.blocks.0.attn.to_qkv.comfy_quant": torch.zeros(1),
+              "decoder.blocks.0.attn.to_qkv.weight_scale": torch.ones(1)}
+        self.assertTrue(vae.is_quantized(sd))
+        self.assertFalse(vae.is_quantized({"decoder.blocks.0.attn.to_qkv.weight": torch.ones(1)}))
         converted = vae.convert_video_vae({"decoder.proj_out.comfy_quant": torch.zeros(1)})
         self.assertIn("decoder.proj_out.comfy_quant", converted)
         self.assertEqual(sorted(converted)[-2:], ["latents_mean", "latents_std"])
@@ -137,13 +124,14 @@ def tiny_dit(curve):
 @unittest.skipIf(torch is None, "needs torch and comfy-kitchen")
 class ForwardTests(unittest.TestCase):
     def test_streams_round_trip_through_the_packed_latent(self):
-        from forge_h3.native.streams import stream_shapes
-        shapes = stream_shapes(frames=22, width=96, height=64)
-        self.assertEqual(shapes.video, (1, 24, 7, 4, 6))
-        self.assertEqual(shapes.audio, (1, 32, 2, 37))
+        from forge_h3.native.streams import still_shapes
+        shapes = still_shapes(width=96, height=64)
+        self.assertEqual(shapes.video, (1, 24, 1, 4, 6))
+        self.assertEqual(shapes.audio, (1, 32, 2, 2))
         video, audio = torch.randn(shapes.video), torch.randn(shapes.audio)
         packed = shapes.pack(video, audio)
         self.assertEqual(packed.shape, (1, 1, 1, video.numel() + audio.numel()))
+        self.assertEqual(shapes.size, video.numel() + audio.numel())
         v, a = shapes.unpack(packed)
         self.assertTrue(torch.equal(v, video) and torch.equal(a, audio))
 
@@ -152,12 +140,12 @@ class ForwardTests(unittest.TestCase):
         for curve in (None, 17):
             with self.subTest(curve=curve), torch.inference_mode():
                 model = tiny_dit(curve)
-                video, audio, context = torch.randn(1, 24, 2, 6, 10), torch.randn(1, 32, 2, 9), torch.randn(1, 7, 48)
+                video, audio, context = torch.randn(1, 24, 1, 6, 10), torch.randn(1, 32, 2, 2), torch.randn(1, 7, 48)
                 t = torch.tensor([700.0])
-                payload = {"audio_scale": 4.0, "layout": PackedLayout(7, 2, 6, 10, 9)}
+                payload = {"layout": PackedLayout(7, 1, 6, 10, 2)}
                 raw = model.forward_streams([video, audio], t, context, minimax_payload=payload)
                 refined = model.forward_streams([video, audio], t, model.preprocess_text_embeds(context), minimax_payload=payload)
-                self.assertEqual([tuple(o.shape) for o in raw], [(1, 24, 2, 6, 10), (1, 32, 2, 9)])
+                self.assertEqual([tuple(o.shape) for o in raw], [(1, 24, 1, 6, 10), (1, 32, 2, 2)])
                 self.assertTrue(all(torch.isfinite(o).all() for o in raw))
                 self.assertTrue(all(torch.allclose(a, b, atol=1e-5) for a, b in zip(raw, refined)))
 
@@ -165,89 +153,50 @@ class ForwardTests(unittest.TestCase):
         from forge_h3.native.streams import Generation, StreamShapes
         with torch.inference_mode():
             model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0)
+            shapes = StreamShapes(video=(1, 24, 1, 6, 10), audio=(1, 32, 2, 2))
+            model.generation = Generation(shapes=shapes, seed=1)
             video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(2, 7, 48)
             t = torch.tensor([700.0, 700.0])
             packed = model(torch.cat([shapes.pack(video, audio)] * 2), t, context)
-            v, a = model.forward_streams([video, audio], t[:1], context[:1], minimax_payload={"audio_scale": 4.0})
+            v, a = model.forward_streams([video, audio], t[:1], context[:1])
             self.assertTrue(torch.allclose(packed[:1], shapes.pack(v, a), atol=1e-5))
+            layout = next(iter(model._layouts.values()))
+            self.assertEqual([k for _, _, k in layout.segments], ["text", "audio", "video"])
+            # the targets start right after the text; the audio rows sit on the video frame's time step
+            (ta, _, _), (tv, _, _) = layout.segments[1:]
+            self.assertEqual((layout.position_ids[ta, 0].item(), layout.position_ids[tv, 0].item()), (7.0, 7.0))
 
-    def test_live_preview_takes_the_middle_video_frame(self):
+    def test_live_preview_takes_the_video_frame(self):
         from forge_h3.native.streams import StreamShapes, preview_frame
-        shapes = StreamShapes(video=(1, 24, 3, 4, 6), audio=(1, 32, 2, 5))
-        video = torch.arange(24 * 3 * 4 * 6, dtype=torch.float32).reshape(shapes.video)
+        shapes = StreamShapes(video=(1, 24, 1, 4, 6), audio=(1, 32, 2, 2))
+        video = torch.arange(24 * 4 * 6, dtype=torch.float32).reshape(shapes.video)
         packed = shapes.pack(video, torch.zeros(shapes.audio))
         frame = preview_frame(packed, shapes)
         self.assertEqual(tuple(frame.shape), (1, 24, 4, 6))
-        self.assertTrue(torch.equal(frame, video[:, :, 1]))
+        self.assertTrue(torch.equal(frame, video[:, :, 0]))
         # any other latent, or no generation, is left for Forge as it is
         other = torch.zeros(1, 4, 8, 8)
         self.assertIs(preview_frame(other, shapes), other)
         self.assertIs(preview_frame(packed, None), packed)
-
-    def test_taeh3_layout_and_preview(self):
-        from forge_h3.native import taeh3
-        from forge_h3.native.streams import StreamShapes
-        decoder = taeh3.decoder()
-        sd = decoder.state_dict()
-        # the published file: 81 float tensors, 24 latent channels in, 3 out, a 1x1 skip where 96 becomes 64
-        self.assertEqual(len(sd), 81)
-        self.assertEqual(tuple(sd["1.weight"].shape), (96, 24, 3, 3))
-        self.assertEqual(tuple(sd["13.skip.weight"].shape), (64, 96, 1, 1))
-        self.assertEqual(tuple(sd["23.weight"].shape), (3, 64, 3, 3))
-        shapes = StreamShapes(video=(1, 24, 3, 4, 6), audio=(1, 32, 2, 5))
-        preview = taeh3.PreviewDecoder(lambda: shapes)
-        packed = shapes.pack(torch.randn(shapes.video), torch.zeros(shapes.audio))
-        image = preview(packed)
-        self.assertEqual(tuple(image.shape), (1, 3, 64, 96))
-        self.assertTrue(float(image.min()) >= 0.0 and float(image.max()) <= 1.0)
 
     def test_text_token_tags_mark_the_vision_blocks(self):
         from forge_h3.native.streams import text_token_tags
         self.assertIsNone(text_token_tags(7, []))
         self.assertEqual(text_token_tags(9, [(1, 4), (6, 12)]).tolist(), [1, 0, 0, 0, 1, 1, 0, 0, 0])
 
-    def test_packed_forward_with_keyframes_matches_the_stream_forward(self):
-        from forge_h3.native.layout import PackedLayout
-        from forge_h3.native.streams import Generation, StreamShapes, text_token_tags
-        with torch.inference_mode():
-            model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            frames = 5
-            keyframes = [{"resolved_frame_index": 0, "latent": torch.randn(1, 24, 1, 6, 10)},
-                         {"resolved_frame_index": frames - 1, "latent": torch.randn(1, 24, 1, 6, 10)}]
-            spans = [(0, 3)]
-            video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(1, 7, 48)
-            t = torch.tensor([700.0])
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, keyframes=keyframes, vision_spans=spans)
-            packed = model(shapes.pack(video, audio), t, context)
-            layout = model._layout(7, shapes, keyframes)
-            self.assertEqual([k for _, _, k in layout.segments], ["text", "cond", "cond", "audio", "video"])
-            payload = {"audio_scale": 4.0, "seed": 1, "keyframes": keyframes,
-                       "cond_video_latents": [kf["latent"] for kf in keyframes], "text_token_tags": text_token_tags(7, spans),
-                       "layout": PackedLayout(7, 2, 6, 10, 9, keyframes=keyframes)}
-            v, a = model.forward_streams([video, audio], t, context, minimax_payload=payload)
-            self.assertTrue(torch.allclose(packed, shapes.pack(v, a), atol=1e-5))
-            # the keyframes change the prediction, and a new set of keyframes gets its own layout
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0)
-            plain = model(shapes.pack(video, audio), t, context)
-            self.assertFalse(torch.allclose(packed, plain, atol=1e-4))
-            self.assertIsNot(model._layout(7, shapes, keyframes[:1]), layout)
-
     def test_packed_forward_with_references_matches_the_stream_forward(self):
         from forge_h3.native.layout import PackedLayout
         from forge_h3.native.streams import Generation, StreamShapes, text_token_tags
         with torch.inference_mode():
             model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            # Ref2VA pictures keep their own size: a portrait and a landscape reference for a landscape clip
+            shapes = StreamShapes(video=(1, 24, 1, 6, 10), audio=(1, 32, 2, 2))
+            # reference pictures keep their own size: a portrait and a landscape reference for a landscape picture
             refs = [{"kind": "image", "latent_h": 8, "latent_w": 4, "latent": torch.randn(1, 24, 1, 8, 4)},
                     {"kind": "image", "latent_h": 6, "latent_w": 10, "latent": torch.randn(1, 24, 1, 6, 10)}]
             spans = [(0, 3), (4, 6)]
             video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(1, 9, 48)
             t = torch.tensor([700.0])
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, refs=refs, vision_spans=spans)
+            model.generation = Generation(shapes=shapes, seed=1, refs=refs, vision_spans=spans)
             packed = model(shapes.pack(video, audio), t, context)
             layout = model._layout(9, shapes, refs=refs)
             self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "ref_img", "audio", "video"])
@@ -256,127 +205,60 @@ class ForwardTests(unittest.TestCase):
             self.assertEqual((b1 - a1, b2 - a2), (8 * 4 // 4, 6 * 10 // 4))
             self.assertEqual(layout.position_ids[a1, 0].item(), 9.0)
             self.assertEqual(layout.position_ids[a2, 0].item(), 10.0)
-            payload = {"audio_scale": 4.0, "seed": 1, "refs": refs, "cond_video_latents": [r["latent"] for r in refs],
-                       "text_token_tags": text_token_tags(9, spans), "layout": PackedLayout(9, 2, 6, 10, 9, refs=refs)}
+            tv, _, _ = next(s for s in layout.segments if s[2] == "video")
+            self.assertEqual(layout.position_ids[tv, 0].item(), 11.0)
+            payload = {"seed": 1, "refs": refs, "cond_video_latents": [r["latent"] for r in refs],
+                       "text_token_tags": text_token_tags(9, spans), "layout": PackedLayout(9, 1, 6, 10, 2, refs=refs)}
             v, a = model.forward_streams([video, audio], t, context, minimax_payload=payload)
             self.assertTrue(torch.allclose(packed, shapes.pack(v, a), atol=1e-5))
-            # the references change the prediction, and other references get their own layout
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0)
+            # the references change the prediction (the toy DiT couples weakly: a reference moves it by about 1e-4),
+            # and other references get their own layout
+            model.generation = Generation(shapes=shapes, seed=1)
             plain = model(shapes.pack(video, audio), t, context)
-            self.assertFalse(torch.allclose(packed, plain, atol=1e-4))
+            self.assertGreater(float((packed - plain).abs().max()), 1e-6)
             self.assertIsNot(model._layout(9, shapes, refs=refs[:1]), layout)
 
-    def test_packed_forward_with_reference_audio_matches_the_stream_forward(self):
-        from forge_h3.native.layout import PackedLayout
-        from forge_h3.native.streams import Generation, StreamShapes, text_token_tags
-        with torch.inference_mode():
-            model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            refs = [{"kind": "image", "latent_h": 6, "latent_w": 10, "latent": torch.randn(1, 24, 1, 6, 10)},
-                    {"kind": "audio", "ref_audio_t": 5, "audio_latent": torch.randn(1, 32, 2, 5)}]
-            spans = [(0, 3)]
-            video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(1, 9, 48)
-            t = torch.tensor([700.0])
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, refs=refs, vision_spans=spans)
-            packed = model(shapes.pack(video, audio), t, context)
-            layout = model._layout(9, shapes, refs=refs)
-            self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "ref_audio", "audio", "video"])
-            # the clip's stereo rows follow the picture, one time step later
-            a, b, _ = next(s for s in layout.segments if s[2] == "ref_audio")
-            self.assertEqual(b - a, 5 * 2)
-            self.assertEqual(layout.position_ids[a, 0].item(), 10.0)
-            payload = {"audio_scale": 4.0, "seed": 1, "refs": refs, "cond_video_latents": [refs[0]["latent"]],
-                       "cond_audio_latents": [refs[1]["audio_latent"]], "text_token_tags": text_token_tags(9, spans),
-                       "layout": PackedLayout(9, 2, 6, 10, 9, refs=refs)}
-            v, a = model.forward_streams([video, audio], t, context, minimax_payload=payload)
-            self.assertTrue(torch.allclose(packed, shapes.pack(v, a), atol=1e-5))
-            # the clip changes the prediction, and a clip of another length gets its own layout
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, refs=refs[:1], vision_spans=spans)
-            # (the toy DiT couples weakly: any reference moves it by about 1e-4)
-            self.assertGreater(float((packed - model(shapes.pack(video, audio), t, context)).abs().max()), 1e-6)
-            other = [refs[0], {**refs[1], "ref_audio_t": 6, "audio_latent": torch.randn(1, 32, 2, 6)}]
-            self.assertIsNot(model._layout(9, shapes, refs=other), layout)
-
-    def test_packed_forward_with_a_reference_video_matches_the_stream_forward(self):
-        from forge_h3.native.layout import PackedLayout
-        from forge_h3.native.streams import Generation, StreamShapes, text_token_tags
-        with torch.inference_mode():
-            model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            refs = [{"kind": "video_audio", "latent_t": 7, "latent_h": 4, "latent_w": 6, "latent": torch.randn(1, 24, 7, 4, 6),
-                     "ref_audio_t": 12, "audio_latent": torch.randn(1, 32, 2, 12)},
-                    {"kind": "video", "latent_t": 2, "latent_h": 6, "latent_w": 10, "latent": torch.randn(1, 24, 2, 6, 10),
-                     "ref_audio_t": 0, "audio_latent": None}]
-            spans = [(0, 3)]
-            video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(1, 9, 48)
-            t = torch.tensor([700.0])
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, refs=refs, vision_spans=spans)
-            packed = model(shapes.pack(video, audio), t, context)
-            layout = model._layout(9, shapes, refs=refs)
-            # a soundtrack packs right before its video rows, both from the same time origin
-            self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_audio", "ref_img", "ref_img", "audio", "video"])
-            (a1, b1, _), (a2, _, _) = layout.segments[1:3]
-            self.assertEqual(b1 - a1, 12 * 2)
-            self.assertEqual(layout.position_ids[a1, 0].item(), layout.position_ids[a2, 0].item())
-            payload = {"audio_scale": 4.0, "seed": 1, "refs": refs, "cond_video_latents": [r["latent"] for r in refs],
-                       "cond_audio_latents": [refs[0]["audio_latent"]], "text_token_tags": text_token_tags(9, spans),
-                       "layout": PackedLayout(9, 2, 6, 10, 9, refs=refs)}
-            v, a = model.forward_streams([video, audio], t, context, minimax_payload=payload)
-            self.assertTrue(torch.allclose(packed, shapes.pack(v, a), atol=1e-5))
-
-    def test_packed_forward_with_a_guide_audio_keyframe_matches_the_stream_forward(self):
-        from forge_h3.native.layout import PackedLayout
-        from forge_h3.native.streams import Generation, StreamShapes
-        with torch.inference_mode():
-            model = tiny_dit(17)
-            shapes = StreamShapes(video=(1, 24, 2, 6, 10), audio=(1, 32, 2, 9))
-            # an audio-only guide at frame 0 and a picture guide at the last frame
-            keyframes = [{"resolved_frame_index": 0, "audio_latent": torch.randn(1, 32, 2, 9)},
-                         {"resolved_frame_index": 21, "latent": torch.randn(1, 24, 1, 6, 10)}]
-            video, audio, context = torch.randn(shapes.video), torch.randn(shapes.audio), torch.randn(1, 7, 48)
-            t = torch.tensor([700.0])
-            model.generation = Generation(shapes=shapes, seed=1, audio_scale=4.0, keyframes=keyframes)
-            packed = model(shapes.pack(video, audio), t, context)
-            layout = model._layout(7, shapes, keyframes)
-            self.assertEqual([k for _, _, k in layout.segments], ["text", "cond_audio", "cond", "audio", "video"])
-            payload = {"audio_scale": 4.0, "seed": 1, "keyframes": keyframes,
-                       "cond_video_latents": [keyframes[1]["latent"]], "cond_audio_latents": [keyframes[0]["audio_latent"]],
-                       "layout": PackedLayout(7, 2, 6, 10, 9, keyframes=keyframes)}
-            v, a = model.forward_streams([video, audio], t, context, minimax_payload=payload)
-            self.assertTrue(torch.allclose(packed, shapes.pack(v, a), atol=1e-5))
-
-    def test_masked_rows_run(self):
-        with torch.inference_mode():
-            model = tiny_dit(None)
-            mask = torch.ones(1, 1, 2, 6, 10)
-            mask[:, :, 0] = 0
-            out = model.forward_streams([torch.randn(1, 24, 2, 6, 10), torch.randn(1, 32, 2, 9)], torch.tensor([500.0]),
-                                        torch.randn(1, 7, 48), denoise_mask=mask)
-            self.assertTrue(all(torch.isfinite(o).all() for o in out))
+    def test_the_layout_cache_is_bounded(self):
+        from forge_h3.native.streams import StreamShapes
+        from forge_h3.native.transformer import LAYOUT_CACHE_SIZE
+        model = tiny_dit(None)
+        shapes = StreamShapes(video=(1, 24, 1, 6, 10), audio=(1, 32, 2, 2))
+        for text_len in range(LAYOUT_CACHE_SIZE + 2):
+            model._layout(text_len + 1, shapes)
+        self.assertLessEqual(len(model._layouts), LAYOUT_CACHE_SIZE)
 
 
 @unittest.skipIf(torch is None, "needs torch and comfy-kitchen")
 class VaeTests(unittest.TestCase):
-    def test_frame_grid_round_trips(self):
-        from forge_h3.native.video_vae import (
-            MiniMaxH3VideoVAE,
-            latent_frames,
-            pixel_frames,
-        )
+    def tiny_vae(self):
+        from forge_h3.native.video_vae import MiniMaxH3VideoVAE
         torch.manual_seed(0)
         model = MiniMaxH3VideoVAE(ch=32, num_layers=1)
         with torch.no_grad():
             for p in model.parameters():
                 torch.nn.init.normal_(p, std=0.02)
-        model.requires_grad_(False)
+        return model.requires_grad_(False)
+
+    def test_a_picture_is_one_latent_frame(self):
+        model = self.tiny_vae()
         with torch.inference_mode():
-            for frames in (5, 22):
-                z = model.encode(torch.rand(1, 3, frames, 64, 96) * 2 - 1)
-                self.assertEqual(z.shape[2], latent_frames(frames))
-                out = model.decode(z)
-                self.assertEqual(tuple(out.shape), (1, 3, pixel_frames(z.shape[2]), 64, 96))
-                self.assertGreaterEqual(float(out.min()), 0.0)
-                self.assertLessEqual(float(out.max()), 1.0)
+            z = model.encode(torch.rand(1, 3, 1, 64, 96) * 2 - 1)
+            self.assertEqual(tuple(z.shape), (1, 24, 1, 4, 6))
+            self.assertEqual(model.decode_output_shape(z.shape), (1, 3, 1, 64, 96))
+            out = model.decode(z)
+            self.assertEqual(tuple(out.shape), (1, 3, 1, 64, 96))
+            self.assertGreaterEqual(float(out.min()), 0.0)
+            self.assertLessEqual(float(out.max()), 1.0)
+            # a picture without the frame axis takes the same path
+            self.assertTrue(torch.equal(model.encode(torch.zeros(1, 3, 64, 96)), model.encode(torch.zeros(1, 3, 1, 64, 96))))
+
+    def test_video_frame_grid_still_round_trips(self):
+        from forge_h3.native.video_vae import latent_frames, pixel_frames
+        model = self.tiny_vae()
+        with torch.inference_mode():
+            z = model.encode(torch.rand(1, 3, 5, 64, 96) * 2 - 1)
+            self.assertEqual(z.shape[2], latent_frames(5))
+            self.assertEqual(tuple(model.decode(z).shape), (1, 3, pixel_frames(z.shape[2]), 64, 96))
 
     def test_encoder_layers_work_with_offloaded_weights(self):
         # issue #4: when VRAM is short Forge keeps these weights in fp32 system RAM and turns on manual cast; a
@@ -398,23 +280,6 @@ class VaeTests(unittest.TestCase):
             torch.testing.assert_close(conv(x, pre_norm=norm, residual=x),
                                        reference_conv(x, pre_norm=reference_norm, residual=x))
         self.assertEqual({conv.weight.dtype, norm.weight.dtype}, {torch.float32})
-
-    def test_audio_one_second_is_forty_latents(self):
-        from forge_h3.native.audio_vae import MiniMaxH3AudioVAE
-        torch.manual_seed(0)
-        model = MiniMaxH3AudioVAE(encoder_dim=8, latent_dim=64, decoder_dim=256)
-        with torch.no_grad():
-            for p in model.parameters():
-                torch.nn.init.normal_(p, std=0.02)
-            model.latents_mean.zero_()
-            model.latents_std.fill_(1.0)
-        model.requires_grad_(False)
-        with torch.inference_mode():
-            z = model.encode(torch.rand(1, 2, 32000) * 2 - 1)
-            self.assertEqual(tuple(z.shape), (1, 32, 2, 40))
-            wave = model.decode(z)
-            self.assertEqual(tuple(wave.shape), (1, 2, 32000))
-            self.assertTrue(torch.isfinite(wave).all())
 
 
 if __name__ == "__main__":

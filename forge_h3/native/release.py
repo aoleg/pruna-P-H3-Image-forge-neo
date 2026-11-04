@@ -16,12 +16,10 @@ import torch.nn as nn
 
 
 def h3_module_types() -> tuple[type, ...]:
-    from .audio_vae import MiniMaxH3AudioVAE
     from .text_encoder import Qwen3VL32B
     from .transformer import MiniMaxH3Model
-    from .vae import AutoencoderMiniMaxH3
     from .video_vae import MiniMaxH3VideoVAE
-    return (MiniMaxH3Model, Qwen3VL32B, AutoencoderMiniMaxH3, MiniMaxH3VideoVAE, MiniMaxH3AudioVAE)
+    return (MiniMaxH3Model, Qwen3VL32B, MiniMaxH3VideoVAE)
 
 
 def is_h3_module(module, types: tuple[type, ...]) -> bool:

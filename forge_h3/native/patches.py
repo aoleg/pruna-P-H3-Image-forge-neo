@@ -7,6 +7,7 @@ import contextlib
 import functools
 import logging
 import os
+from types import SimpleNamespace
 
 import torch
 from backend import loader, memory_management
@@ -18,11 +19,12 @@ from backend.state_dict import load_state_dict
 from huggingface_guess import detection, model_list
 from transformers.modeling_utils import no_init_weights
 
-from . import filebacked, gguf_vision, model, release, taeh3, vae
+from . import filebacked, gguf_vision, model, release, vae
 from .engine import MiniMaxH3Engine
 from .islands import fp32_islands, restore_fp32
 from .text_encoder import Qwen3VL32B
 from .transformer import MiniMaxH3Model
+from .video_vae import MiniMaxH3VideoVAE
 
 logger = logging.getLogger("forge_h3")
 
@@ -90,9 +92,7 @@ def _hook_replace_state_dict() -> None:
         if _is_h3_text_encoder(asd):
             _replace(sd, f"{guess.text_encoder_key_prefix[0]}{TE_PREFIX}", asd)
         elif vae.is_video_vae(asd):
-            _replace(sd, f"{guess.vae_key_prefix[0]}video.", vae.convert_video_vae(asd))
-        elif vae.is_audio_vae(asd):
-            _replace(sd, f"{guess.vae_key_prefix[0]}audio.", vae.convert_audio_vae(asd))
+            _replace(sd, guess.vae_key_prefix[0], vae.convert_video_vae(asd))
         else:
             return original(sd, asd, guess, path)
         return sd
@@ -100,23 +100,23 @@ def _hook_replace_state_dict() -> None:
     loader.replace_state_dict = replace_state_dict
 
 
-def _load_vae(state_dict: dict) -> vae.AutoencoderMiniMaxH3:
-    if not isinstance(state_dict, dict) or not any(k.startswith("video.") for k in state_dict) \
-            or not any(k.startswith("audio.") for k in state_dict):
+def _load_vae(state_dict: dict) -> MiniMaxH3VideoVAE:
+    if not isinstance(state_dict, dict) or not vae.is_video_vae(state_dict):
         raise ValueError(vae.MISSING_VAE)
     layers = vae.video_layers(state_dict)
     with no_init_weights():
-        video = None
-        if vae.is_quantized(state_dict, "video."):
-            # Kijai's int8 video VAE: Forge's mixed-precision operations read each layer's comfy_quant; the audio VAE
-            # stays on plain operations in fp32
+        if vae.is_quantized(state_dict):
+            # Kijai's int8 video VAE: Forge's mixed-precision operations read each layer's comfy_quant
             with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, manual_cast_enabled=True,
                                         extra_dtype={"mixed_ops": True, "TE": False}):
-                video = vae.MiniMaxH3VideoVAE(num_layers=layers)
-        with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, extra_dtype="vae"):
-            pair = vae.AutoencoderMiniMaxH3(video_layers=layers, video=video)
-    load_state_dict(pair, state_dict, log_name="MiniMax H3 VAE")
-    return pair
+                autoencoder = MiniMaxH3VideoVAE(num_layers=layers)
+        else:
+            with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, extra_dtype="vae"):
+                autoencoder = MiniMaxH3VideoVAE(num_layers=layers)
+    # read by Forge's VAE patcher: z_dim for the 3D (video) path
+    autoencoder.config = SimpleNamespace(z_dim=24)
+    load_state_dict(autoencoder, state_dict, log_name="MiniMax H3 VAE")
+    return autoencoder
 
 
 def _file_backed(name: str, module, storages: set[int]) -> None:
@@ -215,33 +215,20 @@ def _hook_unload() -> None:
 
 
 def _hook_taesd() -> None:
-    # Forge's TAESD live preview asks decoder_model() for a decoder; for H3 that is taeh3 (taeh3.py), downloaded once
-    # into models/VAE-taesd with Forge's own downloader. Without it Forge falls back to the RGB preview.
-    from modules import devices, paths_internal, sd_vae_taesd, shared
+    # Forge's TAESD live preview asks decoder_model() for a decoder; H3's packed latent has none, so Forge falls back
+    # to its RGB preview (the latent_rgb_factors of model.py, on the picture's latent frame)
+    from modules import sd_vae_taesd, shared
     original = sd_vae_taesd.decoder_model
-    cache = {}
-
-    def shapes():
-        generation = getattr(shared.sd_model, "generation", None)
-        return generation.shapes if generation is not None else None
 
     def decoder_model():
-        if not getattr(shared.sd_model, "is_h3", False):
-            return original()
-        if "decoder" not in cache:
-            cache["decoder"] = None
-            path = taeh3.path_in(os.path.join(paths_internal.models_path, "VAE-taesd"))
-            try:
-                sd_vae_taesd.download_model(path, taeh3.URL)
-                cache["decoder"] = taeh3.load(path, shapes, devices.device)
-            except Exception as e:
-                logger.warning(f"[MiniMax H3] taeh3 preview unavailable, using the RGB preview: {e}")
-        return cache["decoder"]
+        if getattr(shared.sd_model, "is_h3", False):
+            return None
+        return original()
 
     sd_vae_taesd.decoder_model = decoder_model
 
-    # taeh3 is not an H3 VAE (no encoder, and its decoder gives one frame): with Settings > VAE set to TAESD, Forge
-    # would encode with an SD encoder and save that one frame instead of the video, so H3 always uses the full VAEs
+    # with Settings > VAE set to TAESD, Forge would encode with an SD encoder and decode the packed latent with an
+    # SD decoder, so H3 always uses its full VAE
     original_encoder = sd_vae_taesd.encoder_model
 
     def encoder_model():
@@ -259,7 +246,7 @@ def _hook_taesd() -> None:
             return original_decode(model, x)
         if shared.opts.sd_vae_decode_method != "Full" and not warned:
             warned.append(True)
-            print("[MiniMax H3] Settings > VAE > VAE for Decoding is TAESD: H3 decodes the video with its full VAE")
+            print("[MiniMax H3] Settings > VAE > VAE for Decoding is TAESD: H3 decodes the picture with its full VAE")
         return sd_samplers_common.samples_to_images_tensor(x, 0, model)
 
     original_decode = sd_samplers_common.decode_first_stage
@@ -286,7 +273,7 @@ def apply() -> None:
         _hook_taesd()
     except Exception as e:
         # the model works without it: the RGB preview stays
-        logger.warning(f"[MiniMax H3] could not add the taeh3 preview: {e}")
+        logger.warning(f"[MiniMax H3] could not route the live preview and the VAE settings: {e}")
 
     try:
         from . import presets
