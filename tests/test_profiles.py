@@ -21,7 +21,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIs(for_text_encoder("h3"), H3)
         self.assertIs(for_text_encoder("ph3-image"), PH3_IMAGE)
         self.assertEqual((PH3_IMAGE.name, PH3_IMAGE.steps, PH3_IMAGE.cfg, PH3_IMAGE.shift), ("ph3", 8, 1.0, 1.0))
-        self.assertEqual((H3.name, H3.shift), ("h3", 12.0))
+        self.assertEqual((H3.name, H3.steps, H3.cfg, H3.shift), ("h3", 30, 3.0, 3.0))
 
 
 @unittest.skipIf(torch is None, "needs torch")

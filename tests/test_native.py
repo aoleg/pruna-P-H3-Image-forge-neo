@@ -278,6 +278,10 @@ class VaeTests(unittest.TestCase):
             self.assertEqual(tuple(out.shape), (1, 3, 1, 64, 96))
             self.assertGreaterEqual(float(out.min()), 0.0)
             self.assertLessEqual(float(out.max()), 1.0)
+            # ComfyUI's rule for a lone latent: decoded as a chunk of five copies, the first real frame kept
+            raw = model.latents_mean.view(1, -1, 1, 1, 1) + z * model.latents_std.view(1, -1, 1, 1, 1)
+            chunk = model._finalize_pixels(model._decode_pixels(raw.repeat(1, 1, 5, 1, 1)))
+            torch.testing.assert_close(out, chunk[:, :, 3:4])
             # a picture without the frame axis takes the same path
             self.assertTrue(torch.equal(model.encode(torch.zeros(1, 3, 64, 96)), model.encode(torch.zeros(1, 3, 1, 64, 96))))
 

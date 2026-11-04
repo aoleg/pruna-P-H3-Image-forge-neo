@@ -709,7 +709,10 @@ class MiniMaxH3VideoVAE(nn.Module):
         z = z * latents_std + latents_mean
 
         if z.shape[2] == 1:
-            dec = self._finalize_pixels(self._adaptive_decode(z)[:, :, -1:, :, :])
+            # a still latent is the first latent of a clip and decodes badly alone: decode it as a full chunk of
+            # copies and keep only its first real frame (ComfyUI's current rule)
+            first = slice(self.frame_pre_padding, self.frame_pre_padding + 1)
+            dec = self._finalize_pixels(self._adaptive_decode(z.repeat(1, 1, self.tokens_chunk_size, 1, 1))[:, :, first])
             if output_buffer is None:
                 return dec
             output_buffer.copy_(dec)
@@ -762,6 +765,13 @@ class PH3ImageVAE(MiniMaxH3VideoVAE):
         return (latents - latents_mean) / latents_std
 
     def decode(self, z, output_buffer=None):
+        # one latent is one frame here: no chunk of copies
         if z.shape[2] != 1:
             raise ValueError(f"The P-H3-Image VAE decodes single-frame image latents only, got {z.shape[2]} latent frames")
-        return super().decode(z, output_buffer)
+        latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(z)
+        latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(z)
+        dec = self._finalize_pixels(self._adaptive_decode(z * latents_std + latents_mean))
+        if output_buffer is None:
+            return dec
+        output_buffer.copy_(dec)
+        return output_buffer

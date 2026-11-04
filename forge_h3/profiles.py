@@ -21,9 +21,10 @@ class Profile:
     vae: str           # the VAE variant it needs
 
 
-# a stock H3 checkpoint, with the recipe of the video workflows: a fine-tune may want its own (chroma-h3: ~30
-# Euler steps, CFG 3, shift 3)
-H3 = Profile(name="h3", label="MiniMax H3", sampler="Res Multistep", scheduler="Simple", steps=20, cfg=1.0, shift=12.0,
+# an H3 checkpoint with its own text encoder and VAE, as a still-image model: the recipe of lodestones' chroma-h3
+# fine-tune (its LoRA on any H3 checkpoint, about 30 Euler steps at CFG 3 and shift 3, around 1 MP); its few-step
+# DMD LoRA wants 4 or 8 steps at CFG 1 instead
+H3 = Profile(name="h3", label="MiniMax H3", sampler="Euler", scheduler="Simple", steps=30, cfg=3.0, shift=3.0,
              size=1024, text_encoder="h3", vae="h3")
 # Pruna's P-H3-Image: its 4B text encoder and single-frame VAE, 8 MP output
 PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0, shift=1.0,

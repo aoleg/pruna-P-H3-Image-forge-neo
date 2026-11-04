@@ -225,7 +225,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(p.rng.shape, (1, 1, shapes.size))
         self.assertEqual((self.engine.generation.refs, self.engine.generation.vision_spans), ([], []))
         # outside the h3 preset the Shift slider belongs to another model: H3 keeps its own
-        self.assertEqual(p.distilled_cfg_scale, 12.0)
+        self.assertEqual(p.distilled_cfg_scale, 3.0)
         # one sampler step through the real DiT, then the decode Forge saves
         dit = self.engine.forge_objects.unet.model.diffusion_model
         out = dit(p.modified_noise, torch.tensor([900.0]), cond[0].unsqueeze(0))
@@ -267,7 +267,7 @@ class FlowTests(unittest.TestCase):
         self.engine.set_shift(shift=10.0, width=WIDTH, height=HEIGHT)
         self.assertEqual((self.engine.predictor_shift, self.engine.shift), (10.0, 10.0))
         self.engine.set_shift(0)
-        self.assertEqual(self.engine.shift, 12.0)
+        self.assertEqual(self.engine.shift, 12.0)  # the model definition's own shift
 
     def test_reference_pictures_ride_as_condition_rows_before_the_targets(self):
         # the engine's picture path, which img2img editing will feed: <Picture 1> at its own size

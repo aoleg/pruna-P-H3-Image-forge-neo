@@ -116,7 +116,7 @@ class GradioSmoke(unittest.TestCase):
                 self.assertIn("**Model:** MiniMax H3", enter[2])
                 self.assertIn("MiniMax H3 makes one still image", enter[1])
                 self.assertEqual([enter[i]["value"] for i in (4, 5, 6)], ["Euler", "Automatic", 3.5])
-                self.assertEqual(ui.preset_settings("img2img"), ("Res Multistep", "Simple", 1.0))
+                self.assertEqual(ui.preset_settings("img2img"), ("Euler", "Simple", 3.0))
                 modules.shared.opts.h3_t2i_cfg = 0
                 self.assertIsNone(ui.preset_settings("txt2img")[2])
                 modules.shared.opts.h3_t2i_cfg = 3.5
