@@ -33,6 +33,21 @@ class IslandTests(unittest.TestCase):
         self.assertEqual(set(fp32_islands(sd, curve=False)), {"video_patch_proj.weight"})
         self.assertEqual(set(fp32_islands(sd, curve=True)), {"video_patch_proj.weight", "blocks.0.adaln_proj.linear.weight"})
 
+    def test_the_file_dtype_is_the_bulk_of_its_floating_weights(self):
+        from forge_h3.native.islands import floating_dtype
+        bf16 = {"model.layers.0.mlp.up_proj.weight": torch.ones(64, 8, dtype=torch.bfloat16),
+                "text_connector.proj.weight": torch.ones(4, 4, dtype=torch.float32),
+                "model.layers.0.input_layernorm.weight": torch.ones(8, dtype=torch.float32)}
+        self.assertEqual(floating_dtype(bf16), torch.bfloat16)
+        self.assertEqual(floating_dtype({"w": torch.ones(2, dtype=torch.float16), "i": torch.ones(2, dtype=torch.int8)}), torch.float16)
+        # quantized and GGUF files keep Forge's own detection
+        quantized = dict(bf16, **{"model.layers.0.mlp.up_proj.comfy_quant": torch.zeros(4, dtype=torch.uint8)})
+        self.assertIsNone(floating_dtype(quantized))
+        gguf = {"w": WrappedParameter(torch.ones(2, dtype=torch.float16))}
+        gguf["w"].gguf_cls = object()
+        self.assertIsNone(floating_dtype(gguf))
+        self.assertIsNone(floating_dtype({}))
+
     def test_gguf_style_parameters_are_restored_as_plain_fp32(self):
         dit = Owner()
         islands = {"video_patch_proj.weight": WrappedParameter(torch.full((2, 4), 0.5, dtype=torch.float16)),

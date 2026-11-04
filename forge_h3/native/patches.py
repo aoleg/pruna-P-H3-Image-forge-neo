@@ -21,7 +21,7 @@ from transformers.modeling_utils import no_init_weights
 
 from . import filebacked, gguf_vision, model, release, vae
 from .engine import MiniMaxH3Engine
-from .islands import fp32_islands, restore_fp32
+from .islands import floating_dtype, fp32_islands, restore_fp32
 from .text_encoder import PH3ImageQwen3VL, Qwen3VL32B
 from .transformer import MiniMaxH3Model
 from .video_vae import MiniMaxH3VideoVAE, PH3ImageVAE
@@ -62,6 +62,21 @@ def begin_sampling() -> None:
 def end_sampling() -> None:
     global _sampling_h3
     _sampling_h3 = False
+
+
+@contextlib.contextmanager
+def _file_dtype_kept(state_dict: dict):
+    """A bf16 text encoder file stays bf16, as ComfyUI runs it (llama_detect reads the file's dtype): Forge's default
+    casts every plain text encoder to fp16, which costs a 9 GB copy in RAM for the P-H3-Image file and leaves the
+    file-backed views behind. A text encoder dtype flag on Forge's command line still wins."""
+    from backend.args import args
+    dtype = floating_dtype(state_dict)
+    flags = ("fp32_text_enc", "bf16_text_enc", "fp16_text_enc", "fp8_e4m3fn_text_enc", "fp8_e5m2_text_enc")
+    if dtype != torch.bfloat16 or any(getattr(args, flag, False) for flag in flags):
+        yield
+        return
+    with _swapped(memory_management, "text_encoder_dtype", lambda device=None: torch.bfloat16):
+        yield
 
 
 def text_encoder_class(asd: dict):
@@ -182,7 +197,7 @@ def _hook_components() -> None:
             # Pruna's text connector is fp32 and never quantized; the loader stores every plain layer at one dtype
             connector = {k: v for k, v in state_dict.items() if k.startswith(TE_CONNECTOR_PREFIX)}
             storages = filebacked.file_storages(state_dict)
-            with _swapped(llama, "Qwen3VL", cls):
+            with _swapped(llama, "Qwen3VL", cls), _file_dtype_kept(state_dict):
                 text_encoder = original(guess, component_name, lib_name, cls_name, repo_path, state_dict)
             if gguf:
                 gguf_vision.cast_to_input(text_encoder.visual)
