@@ -40,6 +40,12 @@ class Panel:
         self.saved = gr.State({"active": False})
         with gr.Accordion("MiniMax H3", open=False, visible=False, elem_id=f"{self.tab}_h3_panel") as self.accordion:
             self.status = gr.Markdown("Select the H3 text encoder and VAE in VAE / Text Encoder.")
+            if is_img2img:
+                gr.Markdown("**P-H3-Image edits:** the input image is `<Picture 1>`, the picture to edit; the "
+                            "**ImageStitch Integrated** gallery holds the references, `<Picture 2>` onwards, up to 8 "
+                            "pictures in all. Name them in the prompt (\"the hat from <Picture 2>\"). The picture is "
+                            "generated at Width x Height; Resize mode and Denoising strength are not used. Edits work "
+                            "best at about 4 MP.")
             with gr.Accordion("Components", open=False):
                 self.summary = gr.Markdown("")
         self.bound = False

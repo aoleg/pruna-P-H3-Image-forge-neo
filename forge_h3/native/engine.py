@@ -32,6 +32,17 @@ def finite(tensor: torch.Tensor) -> bool:
     return bool(torch.isfinite(tensor.amax()) and torch.isfinite(tensor.amin()))
 
 
+def vision_copy(image: torch.Tensor) -> torch.Tensor:
+    """A (1, h, w, 3) picture scaled within VISION_PIXELS, aspect kept, sides on the 32 grid, never enlarged."""
+    from ..pictures import VISION_PIXELS, within_area
+    height, width = image.shape[1], image.shape[2]
+    w, h = within_area(width, height, VISION_PIXELS)
+    if (w, h) == (width, height):
+        return image
+    resized = torch.nn.functional.interpolate(image.movedim(-1, 1), size=(h, w), mode="bicubic", antialias=True, align_corners=False)
+    return resized.movedim(1, -1).clamp(0.0, 1.0)
+
+
 def _vae_dtype() -> torch.dtype:
     # ComfyUI runs the H3 VAE in fp16 or fp32 only
     if args.fp32_vae:
@@ -73,12 +84,14 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         self.references: list[torch.Tensor] = []
 
     def set_references(self, references) -> None:
-        """Called by the script for every generation, before Forge encodes the prompt."""
+        """Called by the script for every generation, before Forge encodes the prompt: (1, h, w, 3) pictures in
+        [0, 1], each already within the output area, in "<Picture i>" order."""
         self.references = list(references or ())
 
     def condition_images(self) -> list[torch.Tensor]:
-        """The pictures the text encoder sees before the prompt as "<Picture i>"."""
-        return list(self.references)
+        """The pictures the text encoder sees before the prompt as "<Picture i>", each within 1 MP (ComfyUI
+        PH3ImageConditioning's vision copies)."""
+        return [vision_copy(image) for image in self.references]
 
     def set_shift(self, shift, *args, **kwargs):
         # Forge Neo after d70373e also passes the size (width, height); H3's shift does not depend on it

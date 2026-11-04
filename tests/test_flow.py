@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import forge_stubs
+from PIL import Image
 from test_contracts import DIT, PH3_TE, PH3_VAE, TE, VAE, checkpoint
 
 try:
@@ -21,14 +22,22 @@ try:
 except ImportError:
     torch = None
 
-from forge_h3 import integration
+from forge_h3 import integration, pictures
 from forge_h3.contracts import H3Error, raise_pending_error, set_pending_error
 
 WIDTH, HEIGHT = 96, 64
 
 
+class Script:
+    def __init__(self, title, args_from, args_to):
+        self._title, self.args_from, self.args_to = title, args_from, args_to
+
+    def title(self):
+        return self._title
+
+
 class Txt2Img:
-    def __init__(self):
+    def __init__(self, gallery=()):
         self.prompt, self.negative_prompt = "a bird takes off", ""
         self.n_iter, self.batch_size = 1, 1
         self.width, self.height = WIDTH, HEIGHT
@@ -39,14 +48,16 @@ class Txt2Img:
         self.distilled_cfg_scale, self.is_api = 3.5, False
         self.extra_generation_params, self.override_settings = {}, {}
         self.clear_prompt_cache = Mock()
-        # Script: None; the H3 panel has no inputs of its own
-        self.script_args = [0]
+        # Script: None; the H3 panel has no inputs of its own; ImageStitch (enable, gallery, maximum side)
+        self.script_args = [0, bool(gallery), [(image, None) for image in gallery] or None, 1024]
+        self.scripts = types.SimpleNamespace(alwayson_scripts=[Script("MiniMax H3", 1, 1),
+                                                               Script(pictures.IMAGE_STITCH, 1, 4)])
 
 
 class Img2Img(Txt2Img):
-    def __init__(self):
-        super().__init__()
-        self.init_images = []
+    def __init__(self, gallery=(), init=True):
+        super().__init__(gallery)
+        self.init_images = [Image.new("RGB", (300, 100), "red")] if init else []
         self.resize_mode, self.denoising_strength = 0, 0.75
 
 
@@ -129,14 +140,79 @@ class FlowTests(unittest.TestCase):
         engine.references = []
         return engine
 
+    def use_ph3(self, preset="h3"):
+        """Select P-H3-Image's text encoder and VAE next to the checkpoint."""
+        files = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in
+                 (("ph3_te", PH3_TE), ("ph3_vae", PH3_VAE))]
+        sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files]
+        sys.modules["modules.shared"].opts.forge_preset = preset
+
     def run_until_sampling(self, p):
         """before_process .. process_before_every_sampling, as Forge calls them; returns the conditioning."""
         integration.before_process(p)
         p.sd_model = self.engine
         integration.process(p)
+        if isinstance(p, Img2Img):
+            # images_tensor_to_samples: the input image, already resized by Forge, in [-1, 1]
+            p.init_latent = self.engine.encode_first_stage(torch.full((1, 3, p.height, p.width), 0.25) * 2 - 1)
         cond = self.engine.get_learned_conditioning([p.prompt])
         integration.before_sampling(p, torch.zeros(1, 4, HEIGHT // 8, WIDTH // 8))
         return cond
+
+    def test_img2img_edits_picture_one_with_the_gallery_as_references(self):
+        self.use_ph3()
+        p = Img2Img(gallery=[Image.new("RGB", (40, 80), "green")])
+        p.prompt = "put the hat from <Picture 2> on the person"
+        cond = self.run_until_sampling(p)
+        self.assertEqual((p.h3_request.references, p.denoising_strength), (2, 1.0))
+        self.assertEqual(p.prompt, "Edit <Picture 1>. put the hat from <Picture 2> on the person")
+        self.assertEqual(p.extra_generation_params["H3 Edit pictures"], 2)
+        p.clear_prompt_cache.assert_called()
+        # the original pictures, not Forge's resized copy, each within the 96x64 output area on the 32 grid
+        self.assertEqual([tuple(r.shape) for r in self.engine.references], [(1, 32, 128, 3), (1, 64, 32, 3)])
+        self.assertTrue(torch.allclose(self.engine.references[0][0, 0, 0], torch.tensor([1.0, 0.0, 0.0])))
+        self.assertEqual([tuple(i.shape) for i in self.engine.text_processing_engine_h3.images], [(1, 32, 128, 3), (1, 64, 32, 3)])
+        refs = self.engine.generation.refs
+        self.assertEqual([(r["kind"], r["latent_h"], r["latent_w"], tuple(r["latent"].shape)) for r in refs],
+                         [("image", 2, 8, (1, 24, 1, 2, 8)), ("image", 4, 2, (1, 24, 1, 4, 2))])
+        # img2img samples from init_latent at full denoise: the packed start replaces the placeholder
+        self.assertEqual(p.init_latent.shape, p.modified_noise.shape)
+        self.assertEqual(float(p.init_latent.abs().sum()), 0.0)
+        dit = self.engine.forge_objects.unet.model.diffusion_model
+        out = dit(p.modified_noise, torch.tensor([900.0]), cond[0].unsqueeze(0))
+        self.assertEqual(out.shape, p.modified_noise.shape)
+        self.assertTrue(torch.isfinite(out).all())
+        layout = next(iter(dit._layouts.values()))
+        self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "ref_img", "audio", "video"])
+        # the next txt2img request drops the pictures
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        self.assertEqual((self.engine.references, self.engine.generation.refs), ([], []))
+
+    def test_an_edit_brief_is_encoded_as_it_is_and_large_pictures_shrink_for_the_encoder(self):
+        self.use_ph3()
+        p = Img2Img()
+        p.init_images = [Image.new("RGB", (2560, 1440), "red")]
+        p.width, p.height = 2048, 1152
+        p.prompt = "Edit <Picture 1>. Replace the sky."
+        self.run_until_sampling(p)
+        self.assertEqual(p.prompt, "Edit <Picture 1>. Replace the sky.")
+        # the VAE copy fits the 2048x1152 area, the text encoder's copy fits 1 MP
+        self.assertEqual(tuple(self.engine.references[0].shape), (1, 1152, 2048, 3))
+        self.assertEqual(tuple(self.engine.text_processing_engine_h3.images[0].shape), (1, 736, 1344, 3))
+
+    def test_img2img_needs_p_h3_image_an_input_image_and_a_plain_resize(self):
+        with self.assertRaisesRegex(H3Error, "MiniMax H3 has no edit mode"):
+            integration.before_process(Img2Img())
+        self.use_ph3()
+        with self.assertRaisesRegex(H3Error, "Add an input image"):
+            integration.before_process(Img2Img(init=False))
+        p = Img2Img()
+        p.resize_mode = integration.LATENT_UPSCALE
+        with self.assertRaisesRegex(H3Error, "latent upscale"):
+            integration.before_process(p)
+        with self.assertRaisesRegex(H3Error, "up to 8 pictures"):
+            integration.before_process(Img2Img(gallery=[Image.new("RGB", (32, 32))] * 8))
 
     def test_txt2img_samples_one_packed_still_image(self):
         p = Txt2Img()
@@ -163,10 +239,7 @@ class FlowTests(unittest.TestCase):
         self.assertIsNone(dit.generation)
 
     def test_p_h3_image_takes_its_own_shift_outside_its_preset(self):
-        files = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in
-                 (("model", DIT), ("ph3_te", PH3_TE), ("ph3_vae", PH3_VAE))]
-        sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files[1:]]
-        sys.modules["modules.shared"].opts.forge_preset = "h3"
+        self.use_ph3()
         p = Txt2Img()
         self.run_until_sampling(p)
         self.assertEqual((p.h3_components.profile.name, p.distilled_cfg_scale), ("ph3", 1.0))
@@ -221,14 +294,14 @@ class FlowTests(unittest.TestCase):
         p.clear_prompt_cache.assert_called()
         self.assertEqual((self.engine.references, self.engine.generation.refs), ([], []))
 
-    def test_img2img_is_refused_for_now(self):
-        with self.assertRaisesRegex(H3Error, "img2img is not supported yet"):
+    def test_a_rejected_img2img_stops_at_the_model(self):
+        with self.assertRaisesRegex(H3Error, "no edit mode"):
             integration.before_process(Img2Img())
-        # the pending error reaches the model, which Forge calls directly
+        # the pending error reaches the model and the encoder, which Forge calls directly
         dit = self.engine.forge_objects.unet.model.diffusion_model
-        with self.assertRaisesRegex(H3Error, "img2img"):
+        with self.assertRaisesRegex(H3Error, "no edit mode"):
             dit(torch.zeros(1, 1, 1, 8), torch.tensor([900.0]), torch.zeros(1, 7, 48))
-        with self.assertRaisesRegex(H3Error, "img2img"):
+        with self.assertRaisesRegex(H3Error, "no edit mode"):
             self.engine.encode_first_stage(torch.zeros(1, 3, HEIGHT, WIDTH))
 
     def test_a_batch_of_pictures_needs_batch_count(self):

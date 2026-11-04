@@ -6,11 +6,14 @@ request, give the sampler the packed video+audio noise of one still image, and l
 
 from pathlib import Path
 
+from . import pictures
 from .contracts import GenerationRequest, H3Error, set_pending_error
-from .models import inspect_model, resolve_components
+from .models import PH3_IMAGE, inspect_model, resolve_components
 
 # StableDiffusionProcessing.distilled_cfg_scale when a request does not set it
 API_DEFAULT_DISTILLED_CFG = 3.5
+# img2img Resize mode "Just resize (latent upscale)": it would interpolate the placeholder latent
+LATENT_UPSCALE = 3
 
 
 def checkpoint_info(value):
@@ -79,6 +82,16 @@ def script_before_process(p):
         print(f"[MiniMax H3] {error}")
 
 
+def validate_img2img(p, components):
+    if components.text_encoder.variant != PH3_IMAGE:
+        raise H3Error(f"{components.profile.label} has no edit mode: img2img needs P-H3-Image (its text encoder and "
+                      "VAE). Use txt2img.")
+    if not getattr(p, "init_images", None):
+        raise H3Error("Add an input image for P-H3-Image in img2img: it becomes <Picture 1>, the picture to edit.")
+    if getattr(p, "resize_mode", 0) == LATENT_UPSCALE:
+        raise H3Error("P-H3-Image does not take the latent upscale resize mode. Choose another Resize mode.")
+
+
 def _before_process(p):
     p.h3_references = []
     info = select_h3(p)
@@ -86,14 +99,23 @@ def _before_process(p):
         return
     from modules import processing, shared
     validate_processing(p)
-    if isinstance(p, processing.StableDiffusionProcessingImg2Img):
-        raise H3Error("H3 img2img is not supported yet. Use txt2img.")
     overrides = getattr(p, "override_settings", {})
     components = resolve_components(info.filename, module_paths(overrides.get("forge_additional_modules", shared.opts.forge_additional_modules)))
-    request = GenerationRequest(width=p.width, height=p.height)
+    refs = []
+    if isinstance(p, processing.StableDiffusionProcessingImg2Img):
+        validate_img2img(p, components)
+        # the original pictures, each within the output area for the VAE (ComfyUI PH3ImageConditioning); the text
+        # encoder's 1 MP copies are made from these by the engine
+        refs = [pictures.prepare(image, p.width * p.height) for image in pictures.collect(p)]
+        # the model generates the whole picture from noise, conditioned on <Picture 1>: the input image is never noised
+        p.denoising_strength = 1.0
+        p.prompt = pictures.edit_prompt(p.prompt)
+    request = GenerationRequest(width=p.width, height=p.height, references=len(refs))
     p.h3_request = request
     p.h3_components = components
-    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}")
+    p.h3_references = refs
+    edit = f", editing <Picture 1> with {request.references} pictures" if refs else ""
+    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}{edit}")
 
 
 def process(p):
@@ -111,7 +133,7 @@ def process(p):
         p.clear_prompt_cache()
     engine.set_references(refs)
     if request.references:
-        p.extra_generation_params["H3 References"] = request.references
+        p.extra_generation_params["H3 Edit pictures"] = request.references
 
     profile = p.h3_components.profile
     p.extra_generation_params["H3 Model"] = profile.label
@@ -136,6 +158,10 @@ def before_sampling(p, noise):
     p.rng = rng.ImageRNG(shape, p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength,
                          seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)
     p.modified_noise = p.rng.next().to(device=noise.device, dtype=noise.dtype)
+    if getattr(p, "init_latent", None) is not None:
+        # img2img samples from init_latent at full denoise: the packed start is pure noise
+        import torch
+        p.init_latent = torch.zeros_like(p.modified_noise)
     patches.begin_sampling()
 
 
