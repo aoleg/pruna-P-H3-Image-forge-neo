@@ -16,9 +16,10 @@ except ImportError:
     torch = None
 
 HEADERS = Path(__file__).with_name("fixtures") / "h3_headers.json.gz"
-AUX = (".comfy_quant", ".weight_scale", ".input_scale", ".weight_s_channel", ".weight_s_rel")
+AUX = (".comfy_quant", ".weight_scale", ".input_scale", ".weight_s_channel", ".weight_s_rel", ".weight_codebook")
 DIT_FILES = ("minimax_h3_fl2va_pruned_int8_convrot", "minimax_h3_fl2va_int8_convrot",
-             "minimax_h3_fl2va_pruned_w6a8", "minimax_h3_fl2va_pruned_fp8_scaled")
+             "minimax_h3_fl2va_pruned_w6a8", "minimax_h3_fl2va_pruned_fp8_scaled",
+             "p-h3-image_bf16", "p-h3-image_w4a8")
 
 
 def headers():
@@ -66,7 +67,11 @@ class CheckpointLayoutTests(unittest.TestCase):
                     model = MiniMaxH3Model(**config)
                 self.assertEqual(layout_problems(model, header), [])
                 self.assertEqual(config["num_layers"], 50)
-                self.assertEqual("adaln_curve_grid" in config, "pruned" in name)
+                self.assertEqual("adaln_curve_grid" in config, "pruned" in name or "p-h3" in name)
+        # P-H3-Image's curve table is finer than Comfy-Org's pruned one; both are read from the shape
+        from forge_h3.native.detect import detect
+        self.assertEqual((detect(self.headers["p-h3-image_bf16"])["adaln_curve_grid"], detect(self.headers["p-h3-image_bf16"])["time_embed_dim"]), (4097, 16))
+        self.assertEqual(detect(self.headers["minimax_h3_fl2va_pruned_int8_convrot"])["adaln_curve_grid"], 1025)
 
     def test_detection_ignores_other_models(self):
         from forge_h3.native.detect import detect
@@ -76,6 +81,30 @@ class CheckpointLayoutTests(unittest.TestCase):
         from forge_h3.native.video_vae import MiniMaxH3VideoVAE
         with torch.device("meta"):
             self.assertEqual(layout_problems(MiniMaxH3VideoVAE(), self.headers["minimax_h3_video_vae_fp16"]), [])
+
+    def test_ph3_image_vae_matches_both_published_builds(self):
+        from forge_h3.native import vae
+        from forge_h3.native.video_vae import PH3ImageVAE
+        for name in ("p-h3-image_vae_bf16", "p-h3-image_vae_int8_convrot"):
+            with self.subTest(name), torch.device("meta"):
+                header = self.headers[name]
+                self.assertTrue(vae.is_video_vae(header) and vae.is_ph3_vae(header))
+                self.assertEqual(layout_problems(PH3ImageVAE(num_layers=vae.video_layers(header)), header), [])
+        self.assertFalse(vae.is_ph3_vae(self.headers["minimax_h3_video_vae_fp16"]))
+
+    def test_text_encoders_are_told_apart(self):
+        from forge_h3.models import H3, PH3_IMAGE, _role, _variant
+        for name, variant in (("qwen3vl_32b_minimax_h3_int8_convrot", H3), ("p-h3-image_text_encoder_bf16", PH3_IMAGE)):
+            keys = set(self.headers[name]) - {"__metadata__"}
+            self.assertEqual((_role(keys), _variant("text_encoder", self.headers[name], keys)), ("text_encoder", variant))
+        for name, variant in (("minimax_h3_video_vae_fp16", H3), ("p-h3-image_vae_bf16", PH3_IMAGE)):
+            keys = set(self.headers[name]) - {"__metadata__"}
+            self.assertEqual((_role(keys), _variant("vae", self.headers[name], keys)), ("vae", variant))
+        # the 4B encoder: 36 layers of 2560, the vision tower of Forge Neo's own 4B model, and the connector
+        te = self.headers["p-h3-image_text_encoder_bf16"]
+        self.assertEqual(te["model.language_model.embed_tokens.weight"]["shape"], [151936, 2560])
+        self.assertEqual(max(int(k.split(".")[3]) for k in te if k.startswith("model.language_model.layers.")) + 1, 36)
+        self.assertEqual(te["text_connector.proj.weight"], {"dtype": "F32", "shape": [5120, 5 * 2560]})
 
     def test_original_minimax_vae_converts_to_the_same_layout(self):
         from forge_h3.native import vae
@@ -251,6 +280,36 @@ class VaeTests(unittest.TestCase):
             self.assertLessEqual(float(out.max()), 1.0)
             # a picture without the frame axis takes the same path
             self.assertTrue(torch.equal(model.encode(torch.zeros(1, 3, 64, 96)), model.encode(torch.zeros(1, 3, 1, 64, 96))))
+
+    def test_the_ph3_image_vae_samples_its_posterior_and_decodes_one_frame(self):
+        from forge_h3.native.video_vae import PH3_IMAGE_FRAME_POSITION, PH3ImageVAE
+        torch.manual_seed(0)
+        model = PH3ImageVAE(ch=32, num_layers=1)
+        with torch.no_grad():
+            for p in model.parameters():
+                torch.nn.init.normal_(p, std=0.02)
+        model.requires_grad_(False)
+        self.assertNotIn("decoder.mask_token", model.state_dict())
+        self.assertEqual(tuple(model.decoder.proj_out.weight.shape), (3 * 16 * 16, 2048))
+        with torch.inference_mode():
+            picture = torch.rand(1, 3, 1, 64, 96) * 2 - 1
+            z = model.encode(picture)
+            self.assertEqual(tuple(z.shape), (1, 24, 1, 4, 6))
+            # the posterior sample is seeded: the same picture gives the same latent, and not the mean
+            self.assertTrue(torch.equal(z, model.encode(picture)))
+            mean = (model.quant_conv(model.encoder(model._normalize_pixels(picture))).float().chunk(2, dim=1)[0]
+                    - model.latents_mean.view(1, -1, 1, 1, 1)) / model.latents_std.view(1, -1, 1, 1, 1)
+            self.assertFalse(torch.allclose(z, mean))
+            out = model.decode(z)
+            self.assertEqual(tuple(out.shape), (1, 3, 1, 64, 96))
+            self.assertTrue(0.0 <= float(out.min()) and float(out.max()) <= 1.0)
+            ids = model.decoder._token_ids(1, 4, 6, "cpu", torch.float32)
+            self.assertEqual(tuple(ids.shape), (1, 24, 3))
+            self.assertTrue(bool((ids[..., 0] == PH3_IMAGE_FRAME_POSITION).all()))
+            with self.assertRaisesRegex(ValueError, "single-frame"):
+                model.decode(torch.zeros(1, 24, 2, 4, 6))
+            with self.assertRaisesRegex(ValueError, "single pictures"):
+                model.encode(torch.zeros(1, 3, 5, 64, 96))
 
     def test_video_frame_grid_still_round_trips(self):
         from forge_h3.native.video_vae import latent_frames, pixel_frames

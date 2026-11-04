@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import forge_stubs
-from test_contracts import DIT, TE, VAE, checkpoint
+from test_contracts import DIT, PH3_TE, PH3_VAE, TE, VAE, checkpoint
 
 try:
     import comfy_kitchen  # noqa: F401
@@ -161,6 +161,21 @@ class FlowTests(unittest.TestCase):
         integration.postprocess(p, None)
         self.assertIsNone(self.engine.generation)
         self.assertIsNone(dit.generation)
+
+    def test_p_h3_image_takes_its_own_shift_outside_its_preset(self):
+        files = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in
+                 (("model", DIT), ("ph3_te", PH3_TE), ("ph3_vae", PH3_VAE))]
+        sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files[1:]]
+        sys.modules["modules.shared"].opts.forge_preset = "h3"
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        self.assertEqual((p.h3_components.profile.name, p.distilled_cfg_scale), ("ph3", 1.0))
+        self.assertEqual(p.extra_generation_params["H3 Model"], "P-H3-Image")
+        sys.modules["modules.shared"].opts.forge_preset = "ph3"
+        p = Txt2Img()
+        p.distilled_cfg_scale = 2.0
+        self.run_until_sampling(p)
+        self.assertEqual(p.distilled_cfg_scale, 2.0)
 
     def test_the_h3_preset_keeps_the_slider_and_fills_the_api_default(self):
         sys.modules["modules.shared"].opts.forge_preset = "h3"

@@ -8,6 +8,7 @@ import gradio as gr
 from .contracts import H3Error
 from .integration import checkpoint_info
 from .models import ROLE_LABELS, inspect_model
+from .profiles import H3
 
 COMPONENTS = {}
 NATIVE_CONTROLS = ("sampling", "scheduler", "cfg_scale")
@@ -96,28 +97,41 @@ class Panel:
             leaving = not active and saved.get("active")
             if entering:
                 saved["native"] = [dict(config, value=value) for config, value in zip(defaults, values)]
-            updates = [gr.update() for _ in native]
-            if entering:
-                sampler, scheduler, cfg = preset_settings(self.tab)
-                updates[0] = gr.update(value=sampler)
-                updates[1] = gr.update(value=scheduler)
-                updates[2] = gr.update(value=cfg) if cfg is not None else gr.update()
-            elif leaving:
-                updates = [gr.update(**config) for config in saved.get("native", [])]
-                saved.pop("native", None)
-            saved["active"] = active
             summary = ""
+            profile = None
             if active:
                 try:
                     from .integration import module_paths
                     from .models import resolve_components
                     components = resolve_components(info.filename, module_paths(module_values))
-                    summary = "  \n".join(f"**{ROLE_LABELS[m.role].title()}:** {html.escape(m.path.name)} ({m.quantization})"
-                                          for m in components.models)
+                    profile = components.profile
+                    summary = "  \n".join([f"**Model:** {profile.label}"]
+                                          + [f"**{ROLE_LABELS[m.role].title()}:** {html.escape(m.path.name)} ({m.quantization})"
+                                             for m in components.models])
                     error = ""
                 except H3Error as exc:
                     error = str(exc)
-            status = html.escape(error) if error else "H3 makes one still image per generation."
+            updates = [gr.update() for _ in native]
+            # the profile's recipe when its text encoder and VAE are selected, else the one saved last, on entering
+            # and when the selected modules change it
+            if active and profile is not None and (entering or saved.get("profile") != profile.name):
+                sampler, scheduler, cfg = preset_settings(self.tab, profile)
+                updates[0] = gr.update(value=sampler)
+                updates[1] = gr.update(value=scheduler)
+                updates[2] = gr.update(value=cfg) if cfg is not None else gr.update()
+                saved["profile"] = profile.name
+            elif leaving:
+                updates = [gr.update(**config) for config in saved.get("native", [])]
+                saved.pop("native", None)
+                saved.pop("profile", None)
+            saved["active"] = active
+            if error:
+                status = html.escape(error)
+            elif profile is not None:
+                status = (f"{profile.label} makes one still image per generation: {profile.steps} steps, CFG {profile.cfg:g}, "
+                          f"Shift {profile.shift:g}, best at about {profile.size}x{profile.size} (the {profile.name} UI preset).")
+            else:
+                status = "H3 makes one still image per generation."
             return ([gr.update(visible=active), status, summary, saved] + updates
                     + ([gr.update()] if preset is not None else []) + hidden_updates(len(hidden), active, leaving))
 
@@ -128,8 +142,8 @@ class Panel:
         logger.info("H3 native controls connected for %s.", self.tab)
 
 
-def preset_settings(tab):
-    """The sampler, schedule and CFG saved for the h3 preset in Settings, which start from the reference workflows'
+def preset_settings(tab, profile=H3):
+    """The sampler, schedule and CFG saved for the profile's preset in Settings, which start from the profile's recipe
     (every Forge sampler and schedule works); a CFG of 0 there keeps the current one (None), as Forge's presets do."""
     kind = "i2i" if tab == "img2img" else "t2i"
     try:
@@ -137,11 +151,11 @@ def preset_settings(tab):
         opts = shared.opts
     except (ImportError, AttributeError):
         opts = None
-    sampler = getattr(opts, f"h3_{kind}_sampler", None) or "Res Multistep"
-    scheduler = getattr(opts, f"h3_{kind}_scheduler", None) or "Simple"
-    cfg = getattr(opts, f"h3_{kind}_cfg", None)
+    sampler = getattr(opts, f"{profile.name}_{kind}_sampler", None) or profile.sampler
+    scheduler = getattr(opts, f"{profile.name}_{kind}_scheduler", None) or profile.scheduler
+    cfg = getattr(opts, f"{profile.name}_{kind}_cfg", None)
     if cfg is None:
-        cfg = 1.0
+        cfg = profile.cfg
     return sampler, scheduler, cfg if cfg > 0 else None
 
 

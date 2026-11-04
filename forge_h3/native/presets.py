@@ -1,20 +1,16 @@
-"""An "h3" UI preset, added at runtime: PresetArch gains a member and the preset's options are registered through
-Forge Neo's own presets.register, so they match every other preset (as in the Qwen-Image 2.1 extension).
+"""The "h3" and "ph3" UI presets, added at runtime: PresetArch gains a member per profile and the preset's options
+are registered through Forge Neo's own presets.register, so they match every other preset (as in the Qwen-Image 2.1
+extension). The P-H3-Image schedule joins Forge's scheduler list the same way.
 """
 
 from enum import Enum
 
 from modules_forge import presets
 
-PRESET = "h3"
+from ..profiles import H3, PH3_IMAGE, PH3_IMAGE_SCHEDULER, ph3_image_sigmas
 
-# the base settings of the reference video workflows, the fallback for a stock H3 checkpoint
-SAMPLER = "Res Multistep"
-SCHEDULER = "Simple"
-STEPS = 20
-CFG = 1.0
-# the flow shift of the model definition
-SHIFT = 12.0
+PROFILES = (H3, PH3_IMAGE)
+PRESETS = tuple(profile.name for profile in PROFILES)
 
 
 def _add_enum_member(enum_cls: type[Enum], name: str) -> Enum:
@@ -39,17 +35,17 @@ def _add_enum_member(enum_cls: type[Enum], name: str) -> Enum:
 
 
 def _is_preset_option(key: str) -> bool:
-    return key.startswith(f"{PRESET}_") or key.endswith(f"_{PRESET}")
+    return any(key.startswith(f"{name}_") or key.endswith(f"_{name}") for name in PRESETS)
 
 
 def register() -> None:
-    arch = _add_enum_member(presets.PresetArch, PRESET)
-
-    presets.SAMPLERS[arch] = SAMPLER
-    presets.SCHEDULERS[arch] = SCHEDULER
-    presets.STEPS[arch] = STEPS
-    presets.CFG[arch] = CFG
-    presets.SHIFT[arch] = SHIFT
+    for profile in PROFILES:
+        arch = _add_enum_member(presets.PresetArch, profile.name)
+        presets.SAMPLERS[arch] = profile.sampler
+        presets.SCHEDULERS[arch] = profile.scheduler
+        presets.STEPS[arch] = profile.steps
+        presets.CFG[arch] = profile.cfg
+        presets.SHIFT[arch] = profile.shift
 
     from modules import shared
 
@@ -58,3 +54,17 @@ def register() -> None:
     for key, info in templates.items():
         if _is_preset_option(key) and key not in shared.opts.data_labels:
             shared.opts.add_option(key, info)
+
+
+def register_scheduler() -> None:
+    """Pruna's 8-step grid as a Forge schedule, before the UI lists the schedules."""
+    from modules import sd_schedulers
+
+    if any(s.label == PH3_IMAGE_SCHEDULER for s in sd_schedulers.all_schedulers):
+        return
+    scheduler = sd_schedulers.Scheduler("ph3_image", PH3_IMAGE_SCHEDULER, ph3_image_sigmas)
+    sd_schedulers.all_schedulers.append(scheduler)
+    if scheduler.label not in getattr(sd_schedulers.shared.opts, "hide_schedulers", ()):
+        sd_schedulers.schedulers.append(scheduler)
+        sd_schedulers.schedulers_map[scheduler.name] = scheduler
+        sd_schedulers.schedulers_map[scheduler.label] = scheduler

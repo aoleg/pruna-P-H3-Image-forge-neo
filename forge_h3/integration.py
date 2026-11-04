@@ -93,7 +93,7 @@ def _before_process(p):
     request = GenerationRequest(width=p.width, height=p.height)
     p.h3_request = request
     p.h3_components = components
-    print(f"[MiniMax H3] still image at {request.width}x{request.height}")
+    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}")
 
 
 def process(p):
@@ -113,13 +113,15 @@ def process(p):
     if request.references:
         p.extra_generation_params["H3 References"] = request.references
 
-    from .native.presets import PRESET, SHIFT
-    if getattr(shared.opts, "forge_preset", None) != PRESET:
-        # outside the h3 preset the slider is another model's Distilled CFG; keep H3's own shift (and infotext)
-        p.distilled_cfg_scale = SHIFT
+    profile = p.h3_components.profile
+    p.extra_generation_params["H3 Model"] = profile.label
+    if getattr(shared.opts, "forge_preset", None) != profile.name:
+        # outside the profile's preset the slider is another model's Shift or Distilled CFG; keep the profile's own
+        # shift (and infotext)
+        p.distilled_cfg_scale = profile.shift
     elif getattr(p, "is_api", False) and p.distilled_cfg_scale == API_DEFAULT_DISTILLED_CFG:
         # an API request that leaves distilled_cfg_scale out gets Forge's Flux default; use the preset's Shift
-        p.distilled_cfg_scale = getattr(shared.opts, f"{PRESET}_t2i_dcfg", SHIFT)
+        p.distilled_cfg_scale = getattr(shared.opts, f"{profile.name}_t2i_dcfg", profile.shift)
 
 
 def before_sampling(p, noise):

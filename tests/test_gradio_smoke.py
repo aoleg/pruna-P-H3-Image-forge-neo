@@ -113,6 +113,8 @@ class GradioSmoke(unittest.TestCase):
                 enter = fn("Community", [p.name for p in components], {"active": False}, "DPM++ 2M", "Automatic", 7, "sd")
                 self.assertTrue(enter[0]["visible"])
                 self.assertIn("encoder.safetensors (plain)", enter[2])
+                self.assertIn("**Model:** MiniMax H3", enter[2])
+                self.assertIn("MiniMax H3 makes one still image", enter[1])
                 self.assertEqual([enter[i]["value"] for i in (4, 5, 6)], ["Euler", "Automatic", 3.5])
                 self.assertEqual(ui.preset_settings("img2img"), ("Res Multistep", "Simple", 1.0))
                 modules.shared.opts.h3_t2i_cfg = 0

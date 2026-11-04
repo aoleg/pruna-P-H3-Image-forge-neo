@@ -31,6 +31,12 @@ VAE = {"decoder.x_embedder.proj.weight": ("F16", [1536, 24, 1, 2, 2]),
 AUDIO_VAE = {"pre_block.attn.q_bias": ("F32", [768]),
              "pre_block.attn.v_bias": ("F32", [768]),
              "pre_block.attn.zero_k_bias": ("F32", [768])}
+# P-H3-Image: the 4B encoder with Pruna's text connector, and the VAE whose decoder makes one frame per latent
+PH3_TE = {"model.language_model.embed_tokens.weight": ("BF16", [151936, 2560]),
+          "model.language_model.layers.35.self_attn.q_proj.weight": ("BF16", [4096, 2560]),
+          "model.visual.patch_embed.proj.weight": ("BF16", [1024, 3, 2, 16, 16]),
+          "text_connector.proj.weight": ("F32", [5120, 12800])}
+PH3_VAE = dict(VAE, **{"decoder.proj_out.weight": ("BF16", [768, 2048])})
 
 
 class HeaderTests(unittest.TestCase):
@@ -104,6 +110,21 @@ class HeaderTests(unittest.TestCase):
         paths = [checkpoint(self.root / f"{n}.safetensors", t) for n, t in (("te", TE), ("v", VAE))]
         components = resolve_components(checkpoint(self.root / "model.safetensors", DIT), paths)
         self.assertEqual([m.role for m in components.models], ["dit", "text_encoder", "vae"])
+        self.assertEqual([m.variant for m in components.models], ["h3", "h3", "h3"])
+        self.assertEqual(components.profile.name, "h3")
+
+    def test_the_text_encoder_selects_the_p_h3_image_profile_and_its_vae(self):
+        dit = checkpoint(self.root / "model.safetensors", DIT)
+        te, vae = checkpoint(self.root / "te.safetensors", PH3_TE), checkpoint(self.root / "v.safetensors", PH3_VAE)
+        self.assertEqual((inspect_model(te).role, inspect_model(te).variant), ("text_encoder", "ph3-image"))
+        self.assertEqual((inspect_model(vae).role, inspect_model(vae).variant), ("vae", "ph3-image"))
+        components = resolve_components(dit, [te, vae])
+        self.assertEqual((components.profile.name, components.profile.shift, components.profile.steps), ("ph3", 1.0, 8))
+        # the two P-H3-Image parts go together: the DiT file cannot tell, the mismatch is refused
+        with self.assertRaisesRegex(H3Error, "needs the P-H3-Image VAE"):
+            resolve_components(dit, [te, checkpoint(self.root / "video.safetensors", VAE)])
+        with self.assertRaisesRegex(H3Error, "needs the P-H3-Image text encoder"):
+            resolve_components(dit, [checkpoint(self.root / "encoder.safetensors", TE), vae])
 
 
 def quantized_checkpoint(path, formats, metadata=None, base=DIT, layer="blocks.{i}.mlp.fc1"):

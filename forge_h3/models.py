@@ -142,11 +142,20 @@ def read_header(path):
     return reader(str(path), stat.st_size, stat.st_mtime_ns)
 
 
+# the text encoder and the VAE of P-H3-Image, or of MiniMax H3 itself; the DiT files share one layout
+PH3_IMAGE = "ph3-image"
+H3 = "h3"
+# P-H3-Image's text encoder carries Pruna's text connector; its decoder makes one frame per latent (3 x 16 x 16)
+TEXT_CONNECTOR = "text_connector.proj.weight"
+STILL_PROJ_OUT = 768
+
+
 @dataclass(frozen=True)
 class ModelInfo:
     path: Path
     role: str
     quantization: str
+    variant: str = H3
 
 
 def _role(keys):
@@ -155,13 +164,21 @@ def _role(keys):
             "final_layer.video_out.weight", "final_layer.audio_out.weight"} <= clean:
         return "dit"
     if (any(k.endswith("embed_tokens.weight") for k in keys) and any("visual." in k for k in keys)
-            and any("layers.49." in k for k in keys)):
+            and (any("layers.49." in k for k in keys) or TEXT_CONNECTOR in keys)):
         return "text_encoder"
     if any(k.startswith("decoder.x_embedder.") for k in keys) and any(k.startswith("decoder.register_tokens") for k in keys):
         return "vae"
     if {"pre_block.attn.q_bias", "pre_block.attn.v_bias", "pre_block.attn.zero_k_bias"} <= keys:
         return "audio_vae"
     return None
+
+
+def _variant(role, header, keys):
+    if role == "text_encoder" and TEXT_CONNECTOR in keys:
+        return PH3_IMAGE
+    if role == "vae" and header.get("decoder.proj_out.weight", {}).get("shape", [0])[0] == STILL_PROJ_OUT:
+        return PH3_IMAGE
+    return H3
 
 
 # ComfyUI quantization formats as the files name them, and the short label the Components panel shows
@@ -251,9 +268,10 @@ def inspect_model(path):
                           "H3 cannot load. Select unsloth's qwen3vl_32b_minimax_h3 GGUF or a safetensors H3 text "
                           "encoder, such as qwen3vl_32b_minimax_h3_int8_convrot.")
         return None
+    variant = _variant(role, header, keys)
     if suffix == ".gguf":
-        return ModelInfo(path, role, _gguf_quantization(path, header, role))
-    return ModelInfo(path, role, _quantization(header, keys, path))
+        return ModelInfo(path, role, _gguf_quantization(path, header, role), variant)
+    return ModelInfo(path, role, _quantization(header, keys, path), variant)
 
 
 @dataclass(frozen=True)
@@ -265,6 +283,12 @@ class Components:
     @property
     def models(self):
         return (self.dit, self.text_encoder, self.vae)
+
+    @property
+    def profile(self):
+        """The recipe of the selected model: the text encoder tells P-H3-Image from H3, the DiT files cannot."""
+        from .profiles import for_text_encoder
+        return for_text_encoder(self.text_encoder.variant)
 
 
 def resolve_components(dit_path, module_paths):
@@ -288,4 +312,11 @@ def resolve_components(dit_path, module_paths):
     for role in REQUIRED_ROLES:
         if role not in resolved:
             raise H3Error(f"Select the H3 {ROLE_LABELS[role]} in Forge's VAE / Text Encoder field.")
-    return Components(**resolved)
+    components = Components(**resolved)
+    if components.vae.variant != components.profile.vae:
+        if components.profile.vae == PH3_IMAGE:
+            raise H3Error("The P-H3-Image text encoder needs the P-H3-Image VAE (p-h3-image_vae), whose decoder makes "
+                          "one frame per latent: select it in place of the H3 video VAE.")
+        raise H3Error("The P-H3-Image VAE needs the P-H3-Image text encoder (p-h3-image_text_encoder): select it in "
+                      "place of the H3 text encoder, or select the H3 video VAE.")
+    return components

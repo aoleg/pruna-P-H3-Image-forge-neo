@@ -22,17 +22,21 @@ from transformers.modeling_utils import no_init_weights
 from . import filebacked, gguf_vision, model, release, vae
 from .engine import MiniMaxH3Engine
 from .islands import fp32_islands, restore_fp32
-from .text_encoder import Qwen3VL32B
+from .text_encoder import PH3ImageQwen3VL, Qwen3VL32B
 from .transformer import MiniMaxH3Model
-from .video_vae import MiniMaxH3VideoVAE
+from .video_vae import MiniMaxH3VideoVAE, PH3ImageVAE
 
 logger = logging.getLogger("forge_h3")
 
-TE_KEYS = ("visual.deepstack_merger_list.0.norm.weight", "model.layers.49.self_attn.q_proj.weight")
+# the vision tower marks a Qwen3-VL file (Comfy-Org's files start at "visual.", Pruna's at "model.visual."); H3's
+# 32B encoder is truncated after layer 50, P-H3-Image's 4B one carries Pruna's text connector
+TE_VISION_KEY = "visual.deepstack_merger_list.0.norm.weight"
+TE_32B_KEYS = ("model.layers.49.self_attn.q_proj.weight", "model.language_model.layers.49.self_attn.q_proj.weight")
+TE_CONNECTOR_PREFIX = "text_connector."
 TE_PREFIX = "qwen3vl_32b.transformer."
 
-MISSING_TE = ("MiniMax H3 needs its Qwen3-VL 32B text encoder: select a qwen3vl_32b_minimax_h3 file under VAE / Text "
-              "Encoder")
+MISSING_TE = ("MiniMax H3 needs its text encoder: select a qwen3vl_32b_minimax_h3 or a p-h3-image_text_encoder file "
+              "under VAE / Text Encoder")
 
 _applied = False
 _sampling_h3 = False
@@ -60,8 +64,19 @@ def end_sampling() -> None:
     _sampling_h3 = False
 
 
+def text_encoder_class(asd: dict):
+    """The encoder class a text encoder state dict needs, None for any other file."""
+    if not any(k.endswith(TE_VISION_KEY) for k in asd):
+        return None
+    if any(k.startswith(TE_CONNECTOR_PREFIX) for k in asd):
+        return PH3ImageQwen3VL
+    if any(k in asd for k in TE_32B_KEYS):
+        return Qwen3VL32B
+    return None
+
+
 def _is_h3_text_encoder(asd: dict) -> bool:
-    return all(k in asd for k in TE_KEYS)
+    return text_encoder_class(asd) is not None
 
 
 def _hook_detection() -> None:
@@ -104,15 +119,17 @@ def _load_vae(state_dict: dict) -> MiniMaxH3VideoVAE:
     if not isinstance(state_dict, dict) or not vae.is_video_vae(state_dict):
         raise ValueError(vae.MISSING_VAE)
     layers = vae.video_layers(state_dict)
+    # P-H3-Image's VAE decodes one frame per latent; the video VAE is Comfy-Org's, Kijai's or MiniMax's own
+    cls = PH3ImageVAE if vae.is_ph3_vae(state_dict) else MiniMaxH3VideoVAE
     with no_init_weights():
         if vae.is_quantized(state_dict):
-            # Kijai's int8 video VAE: Forge's mixed-precision operations read each layer's comfy_quant
+            # an int8 VAE (Kijai's, Pruna's): Forge's mixed-precision operations read each layer's comfy_quant
             with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, manual_cast_enabled=True,
                                         extra_dtype={"mixed_ops": True, "TE": False}):
-                autoencoder = MiniMaxH3VideoVAE(num_layers=layers)
+                autoencoder = cls(num_layers=layers)
         else:
             with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, extra_dtype="vae"):
-                autoencoder = MiniMaxH3VideoVAE(num_layers=layers)
+                autoencoder = cls(num_layers=layers)
     # read by Forge's VAE patcher: z_dim for the 3D (video) path
     autoencoder.config = SimpleNamespace(z_dim=24)
     load_state_dict(autoencoder, state_dict, log_name="MiniMax H3 VAE")
@@ -154,16 +171,23 @@ def _hook_components() -> None:
         if cls_name == "Qwen3VLModel":
             if not isinstance(state_dict, dict) or len(state_dict) <= 16:
                 raise ValueError(MISSING_TE)
+            cls = text_encoder_class(state_dict)
+            if cls is None:
+                raise ValueError(MISSING_TE)
             gguf = gguf_vision.is_gguf(state_dict)
             if gguf:
                 from backend.loader_gguf import dequantize
 
                 gguf_vision.plain_vision(state_dict, dequantize)
+            # Pruna's text connector is fp32 and never quantized; the loader stores every plain layer at one dtype
+            connector = {k: v for k, v in state_dict.items() if k.startswith(TE_CONNECTOR_PREFIX)}
             storages = filebacked.file_storages(state_dict)
-            with _swapped(llama, "Qwen3VL", Qwen3VL32B):
+            with _swapped(llama, "Qwen3VL", cls):
                 text_encoder = original(guess, component_name, lib_name, cls_name, repo_path, state_dict)
             if gguf:
                 gguf_vision.cast_to_input(text_encoder.visual)
+            if connector:
+                restore_fp32(text_encoder, connector)
             _file_backed("text encoder", text_encoder, storages)
             return text_encoder
 
@@ -278,10 +302,17 @@ def apply() -> None:
     try:
         from . import presets
 
+        presets.register_scheduler()
+    except Exception as e:
+        # P-H3-Image still runs on Forge's own schedules (Simple at shift 1 is the closest)
+        logger.warning(f"[MiniMax H3] could not add the P-H3-Image schedule: {e}")
+    try:
+        from . import presets
+
         presets.register()
     except Exception as e:
-        # the model still works without the preset: Res Multistep or Euler, Simple, 20 steps, CFG 1
-        logger.warning(f"[MiniMax H3] could not add the h3 UI preset: {e}")
+        # the model still works without the presets: the panel applies each profile's sampler, schedule and CFG
+        logger.warning(f"[MiniMax H3] could not add the h3 and ph3 UI presets: {e}")
 
     _applied = True
     print(f"[MiniMax H3] native backend enabled (torch {torch.__version__}, {os.path.basename(model.CONFIG_DIR)})")
