@@ -92,6 +92,30 @@ def validate_img2img(p, components):
         raise H3Error("P-H3-Image does not take the latent upscale resize mode. Choose another Resize mode.")
 
 
+_precision_noted = False
+
+
+def note_precision_flags():
+    """Once per session: Forge flags that run below the precision of the models' ComfyUI reference, which an
+    8-step distilled model shows in its fine detail."""
+    global _precision_noted
+    if _precision_noted:
+        return
+    _precision_noted = True
+    try:
+        from backend.args import args
+    except ImportError:
+        return
+    notes = []
+    if getattr(args, "use_ck_attention", False):
+        notes.append("--use-ck-attention runs INT8 attention in the DiT and the VAE decoder")
+    if getattr(args, "fast_fp16", False):
+        notes.append("--fast-fp16 accumulates fp16 matmuls in fp16 (the VAE decoder, a fp16 text encoder)")
+    if notes:
+        print("[MiniMax H3] note: " + "; ".join(notes) + ". The reference runs full precision there: compare without "
+              "the flag if small details come out garbled.")
+
+
 def _before_process(p):
     p.h3_references = []
     info = select_h3(p)
@@ -99,6 +123,7 @@ def _before_process(p):
         return
     from modules import processing, shared
     validate_processing(p)
+    note_precision_flags()
     overrides = getattr(p, "override_settings", {})
     components = resolve_components(info.filename, module_paths(overrides.get("forge_additional_modules", shared.opts.forge_additional_modules)))
     refs = []
