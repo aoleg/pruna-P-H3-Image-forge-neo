@@ -34,7 +34,7 @@ From [Comfy-Org/MiniMax-H3-Image](https://huggingface.co/Comfy-Org/MiniMax-H3-Im
 | Text encoder | `text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 27.1 GB | `models/text_encoder` |
 | VAE | `vae/minimax_h3_image_vae_fp16.safetensors` | 1.2 GB | `models/VAE` |
 
-The text encoder is MiniMax H3's own, so a file you already have for H3 works, Merserk's INT4 and unsloth's GGUF included. `qwen3vl_32b_minimax_h3_nvfp4_awq` is refused (see below). `qwen3.5_9b_w4a8_gptq` is the prompt enhancer and is not used.
+The text encoder is MiniMax H3's own, so a file you already have for H3 works, Merserk's INT4 and unsloth's GGUF included. Experimental: `p-h3-image_text_encoder_*` (P-H3-Image's 4B encoder with its text connector) is accepted in its place and marked as experimental in the console, the panel and the infotext; the recipe stays MiniMax-H3-Image's. `qwen3vl_32b_minimax_h3_nvfp4_awq` is refused (see below). `qwen3.5_9b_w4a8_gptq` is the prompt enhancer and is not used.
 
 The checkpoint is recognized by its tensors: the H3 DiT without the audio stream, with six stacked output heads. The sigma grid of the heads is read from the file's metadata; a file without it (a repack, a GGUF) gets the published grid. The VAE is recognized by its 2D decoder (24 blocks, 16 heads) and has to be selected with this checkpoint and no other.
 
@@ -94,7 +94,7 @@ With the setting on, the input image is `<Picture 1>`; **ImageStitch Integrated*
 | --- | --- |
 | The MiniMax H3 panel does not appear | Select an H3 or P-H3-Image checkpoint; the panel shows only for them. If the console says `H3 native controls were not found`, update Forge Neo and restart. |
 | `Select the H3 text encoder / VAE...` | Select both components under **VAE / Text Encoder**, one of each. |
-| `MiniMax-H3-Image needs its own VAE` / `uses the MiniMax H3 text encoder` / `The MiniMax-H3-Image VAE goes with the MiniMax-H3-Image checkpoint` | Select the three MiniMax-H3-Image parts together: its checkpoint, `qwen3vl_32b_minimax_h3_*` and `minimax_h3_image_vae_fp16`. |
+| `MiniMax-H3-Image needs its own VAE` / `The MiniMax-H3-Image VAE goes with the MiniMax-H3-Image checkpoint` | Select the MiniMax-H3-Image parts together: its checkpoint, `qwen3vl_32b_minimax_h3_*` (or, experimentally, `p-h3-image_text_encoder_*`) and `minimax_h3_image_vae_fp16`. |
 | `... asks for comfy-kitchen's INT8 attention` (a note, not an error) | Start Forge Neo with `--use-ck-attention` to run MiniMax-H3-Image as ComfyUI does. |
 | `MiniMax H3 PDD heads need the sampler's sigma schedule` | The sampler in use does not hand its schedule to the model. Use Euler. |
 | `The P-H3-Image text encoder needs the P-H3-Image VAE` | The two P-H3-Image parts go together: select `p-h3-image_vae_*`, not the H3 video VAE; and the other way round. |

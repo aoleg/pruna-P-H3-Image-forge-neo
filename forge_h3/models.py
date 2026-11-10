@@ -302,6 +302,16 @@ class Components:
         return for_components(self.dit.variant, self.text_encoder.variant)
 
     @property
+    def experimental(self) -> str:
+        """A pairing the models were not released with, in words for the console, the panel and the infotext; empty
+        for a released set. MiniMax-H3-Image with P-H3-Image's 4B text encoder: Pruna distilled that encoder (and its
+        text connector) to stand in for the H3 32B one in front of an H3 DiT, so the conditioning has the width and,
+        by reports, the meaning this checkpoint reads; the checkpoint itself was never trained on it."""
+        if self.dit.variant == H3_IMAGE and self.text_encoder.variant == PH3_IMAGE:
+            return "P-H3-Image text encoder"
+        return ""
+
+    @property
     def wants_int8_attention(self) -> bool:
         """Whether the checkpoint declares comfy-kitchen's INT8 attention for its blocks, as ComfyUI then uses."""
         return ATTENTION_KEY in read_header(self.dit.path)
@@ -330,9 +340,8 @@ def resolve_components(dit_path, module_paths):
             raise H3Error(f"Select the H3 {ROLE_LABELS[role]} in Forge's VAE / Text Encoder field.")
     components = Components(**resolved)
     if components.dit.variant == H3_IMAGE:
-        if components.text_encoder.variant != H3:
-            raise H3Error("MiniMax-H3-Image uses the MiniMax H3 text encoder (qwen3vl_32b_minimax_h3), not "
-                          "P-H3-Image's: select it under VAE / Text Encoder.")
+        # the text encoder is the H3 32B one; P-H3-Image's 4B encoder is let through as an experiment
+        # (Components.experimental)
         if components.vae.variant != H3_IMAGE:
             raise H3Error("MiniMax-H3-Image needs its own VAE (minimax_h3_image_vae), whose 2D decoder makes one "
                           "picture per latent: select it in place of the other VAE.")

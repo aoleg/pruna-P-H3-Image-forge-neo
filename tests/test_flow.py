@@ -250,6 +250,24 @@ class FlowTests(unittest.TestCase):
         image = self.engine.decode_first_stage(p.modified_noise)
         self.assertEqual(tuple(image.shape), (1, 3, HEIGHT, WIDTH))
 
+    def test_minimax_h3_image_takes_the_p_h3_image_text_encoder_as_an_experiment(self):
+        self.use_h3_image()
+        modules = sys.modules["modules.shared"].opts.forge_additional_modules
+        modules[0] = str(checkpoint(self.root / "ph3_te.safetensors", PH3_TE))
+        p = Txt2Img()
+        with patch("builtins.print") as printed:
+            self.run_until_sampling(p)
+        self.assertTrue(any("MiniMax-H3-Image (experimental: P-H3-Image text encoder)" in str(call.args[0])
+                            for call in printed.call_args_list))
+        # the checkpoint's recipe, not P-H3-Image's: six steps on its own grid, no audio stub
+        self.assertEqual((p.h3_components.profile.name, p.extra_generation_params["H3 Experimental"]),
+                         ("h3image", "P-H3-Image text encoder"))
+        self.assertEqual(self.engine.generation.shapes.audio, (1, 32, 2, 0))
+        p = Txt2Img()
+        modules[0] = str(self.root / "encoder.safetensors")
+        self.run_until_sampling(p)
+        self.assertNotIn("H3 Experimental", p.extra_generation_params)
+
     def test_minimax_h3_image_edits_with_its_own_labels_and_sizes(self):
         self.use_h3_image()
         p = Img2Img()

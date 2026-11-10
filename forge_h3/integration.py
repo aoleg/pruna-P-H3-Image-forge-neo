@@ -167,7 +167,8 @@ def _before_process(p):
     p.h3_components = components
     p.h3_references = refs
     p.h3_vision = vision
-    print(f"[MiniMax H3] {profile.label}: still image at {request.width}x{request.height}{detail}")
+    experimental = f" (experimental: {components.experimental})" if components.experimental else ""
+    print(f"[MiniMax H3] {profile.label}{experimental}: still image at {request.width}x{request.height}{detail}")
 
 
 def process(p):
@@ -190,6 +191,8 @@ def process(p):
         p.extra_generation_params["H3 Edit pictures"] = request.references
 
     p.extra_generation_params["H3 Model"] = profile.label
+    if p.h3_components.experimental:
+        p.extra_generation_params["H3 Experimental"] = p.h3_components.experimental
     if getattr(shared.opts, "forge_preset", None) != profile.name:
         # outside the profile's preset the slider is another model's Shift or Distilled CFG; keep the profile's own
         # shift (and infotext)

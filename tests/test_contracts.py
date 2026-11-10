@@ -146,9 +146,12 @@ class HeaderTests(unittest.TestCase):
         self.assertTrue(components.wants_int8_attention)
         self.assertFalse(resolve_components(checkpoint(self.root / "model.safetensors", DIT),
                                             [te, checkpoint(self.root / "video.safetensors", VAE)]).wants_int8_attention)
-        # its parts go together: the H3 text encoder and its own VAE, and that VAE with no other checkpoint
-        with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image uses the MiniMax H3 text encoder"):
-            resolve_components(dit, [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), vae])
+        self.assertEqual(components.experimental, "")
+        # experimental: P-H3-Image's 4B text encoder in front of this checkpoint keeps the checkpoint's own recipe
+        mixed = resolve_components(dit, [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), vae])
+        self.assertEqual((mixed.profile.name, mixed.text_encoder.variant, mixed.experimental),
+                         ("h3image", "ph3-image", "P-H3-Image text encoder"))
+        # its VAE stays its own, and goes with no other checkpoint
         for other in (VAE, PH3_VAE):
             with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image needs its own VAE"):
                 resolve_components(dit, [te, checkpoint(self.root / "other.safetensors", other)])

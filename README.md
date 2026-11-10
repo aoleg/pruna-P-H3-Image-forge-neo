@@ -44,6 +44,8 @@ The checkpoint is the H3 DiT without the audio layers, with six output heads, on
 
 The checkpoint asks for comfy-kitchen's INT8 attention, which ComfyUI then uses; in Forge Neo that is the `--use-ck-attention` launch flag. Without it the model runs on Forge's default attention, slower and with more VRAM at these sizes.
 
+**Experimental:** P-H3-Image's much smaller text encoder (`p-h3-image_text_encoder_*`, 3.6 to 9.1 GB) is accepted in place of the 32B one. Pruna distilled it to stand in for the H3 encoder, and there are reports that MiniMax-H3-Image follows it, but the checkpoint was not trained with it. The console, the panel and the infotext mark such a generation as experimental. Sampling, sizes and the VAE stay MiniMax-H3-Image's.
+
 Not used here: the `qwen3.5_9b_w4a8_gptq` prompt enhancer (the model expects a detailed English description of the whole picture, so write one or expand the prompt elsewhere), and the `nvfp4_awq` text encoder, which this extension still refuses because it encoded prompts wrongly in Forge Neo when last tried.
 
 Its license is the MiniMax-H3-Image Community License, not MiniMax H3's: read it before commercial use.
@@ -113,6 +115,7 @@ Off, img2img is Forge's own with any H3 model: the input image is encoded, noise
 
 ## Known unknowns
 
+- MiniMax-H3-Image with P-H3-Image's text encoder is an experiment on hearsay: nothing here has compared it with the 32B encoder.
 - MiniMax-H3-Image has not been run on a GPU here. Its checkpoint and VAE match the extension's classes tensor for tensor, the head selection and sigma grid follow ComfyUI's code, and the offline tests pass; the first pictures are still the test.
 - The working-memory reservation is an estimate (the console prints the measured figure on the first step of every generation); 16 MP is twice the tokens of anything tried so far.
 - chroma-h3 and the stock H3 checkpoint with Pruna's LoRA have not been run yet. chroma-h3's own inference layout is not published; the extension runs it as P-H3-Image is run (one latent frame, a two-step audio stub). If that is not how it was trained, the pictures will say so.

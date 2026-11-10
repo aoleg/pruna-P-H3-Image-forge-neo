@@ -113,7 +113,8 @@ class Panel:
                     from .models import resolve_components
                     components = resolve_components(info.filename, module_paths(module_values))
                     profile = components.profile
-                    summary = "  \n".join([f"**Model:** {profile.label}"]
+                    experimental = f" (experimental: {components.experimental})" if components.experimental else ""
+                    summary = "  \n".join([f"**Model:** {profile.label}{experimental}"]
                                           + [f"**{ROLE_LABELS[m.role].title()}:** {html.escape(m.path.name)} ({m.quantization})"
                                              for m in components.models])
                     error = ""
