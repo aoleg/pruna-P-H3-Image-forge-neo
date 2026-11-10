@@ -14,7 +14,16 @@ from unittest.mock import Mock, patch
 
 import forge_stubs
 from PIL import Image
-from test_contracts import DIT, PH3_TE, PH3_VAE, TE, VAE, checkpoint
+from test_contracts import (
+    DIT,
+    H3_IMAGE_DIT,
+    H3_IMAGE_VAE,
+    PH3_TE,
+    PH3_VAE,
+    TE,
+    VAE,
+    checkpoint,
+)
 
 try:
     import comfy_kitchen  # noqa: F401
@@ -78,10 +87,10 @@ class FakeTextEngine:
     """Records the pictures handed with the prompt; its vision block spans the first three tokens."""
 
     def __init__(self):
-        self.images, self.vision_spans = [], []
+        self.images, self.vision_spans, self.picture_label = [], [], None
 
-    def __call__(self, texts, images=()):
-        self.images = list(images)
+    def __call__(self, texts, images=(), picture_label=None):
+        self.images, self.picture_label = list(images), picture_label
         self.vision_spans = [(0, 3)] if images else []
         return [torch.randn(7, 48) for _ in texts]
 
@@ -181,10 +190,12 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(p.prompt, "Edit <Picture 1>. put the hat from <Picture 2> on the person")
         self.assertEqual(p.extra_generation_params["H3 Edit pictures"], 2)
         p.clear_prompt_cache.assert_called()
-        # the original pictures, not Forge's resized copy, each within the 96x64 output area on the 32 grid
+        # the original pictures, not Forge's resized copy, each within the 96x64 output area on the 32 grid for the
+        # VAE and within 1 MP for the text encoder
         self.assertEqual([tuple(r.shape) for r in self.engine.references], [(1, 32, 128, 3), (1, 64, 32, 3)])
         self.assertTrue(torch.allclose(self.engine.references[0][0, 0, 0], torch.tensor([1.0, 0.0, 0.0])))
-        self.assertEqual([tuple(i.shape) for i in self.engine.text_processing_engine_h3.images], [(1, 32, 128, 3), (1, 64, 32, 3)])
+        self.assertEqual([tuple(i.shape) for i in self.engine.text_processing_engine_h3.images], [(1, 96, 288, 3), (1, 64, 32, 3)])
+        self.assertEqual(self.engine.text_processing_engine_h3.picture_label, "<Picture %d>: ")
         refs = self.engine.generation.refs
         self.assertEqual([(r["kind"], r["latent_h"], r["latent_w"], tuple(r["latent"].shape)) for r in refs],
                          [("image", 2, 8, (1, 24, 1, 2, 8)), ("image", 4, 2, (1, 24, 1, 4, 2))])
@@ -205,6 +216,65 @@ class FlowTests(unittest.TestCase):
         p = Txt2Img()
         self.run_until_sampling(p)
         self.assertEqual((self.engine.references, self.engine.generation.refs), ([], []))
+
+    def use_h3_image(self):
+        """Select MiniMax-H3-Image: its checkpoint (no audio stream, six output heads), the H3 text encoder and its
+        VAE; the engine gets the matching toy DiT."""
+        from test_native import tiny_dit
+        files = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in
+                 (("h3image", H3_IMAGE_DIT), ("encoder", TE), ("h3image_vae", H3_IMAGE_VAE))]
+        sys.modules["modules.sd_models"].get_closet_checkpoint_match = lambda value: types.SimpleNamespace(filename=str(files[0]))
+        sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files[1:]]
+        self.engine.forge_objects.unet = FakeUnetPatcher(types.SimpleNamespace(diffusion_model=tiny_dit(17, image=True)))
+
+    def test_minimax_h3_image_samples_the_picture_alone_on_its_six_heads(self):
+        self.use_h3_image()
+        p = Txt2Img()
+        cond = self.run_until_sampling(p)
+        self.assertEqual((p.h3_components.profile.name, p.extra_generation_params["H3 Model"]), ("h3image", "MiniMax-H3-Image"))
+        shapes = self.engine.generation.shapes
+        # no audio stub: the packed latent is the picture's latent
+        self.assertEqual((shapes.video, shapes.audio), ((1, 24, 1, HEIGHT // 16, WIDTH // 16), (1, 32, 2, 0)))
+        self.assertEqual(tuple(p.modified_noise.shape), (1, 1, 1, 24 * (HEIGHT // 16) * (WIDTH // 16)))
+        from forge_h3.native import engine as engine_module
+        self.assertEqual(engine_module.sampling_tokens(self.engine.generation), 6 + engine_module.TEXT_TOKENS_RESERVED)
+        # each of the six steps takes its own head: the schedule Forge hands the model is the checkpoint's grid
+        dit = self.engine.forge_objects.unet.model.diffusion_model
+        sigmas = torch.tensor(dit.pdd_sigmas)
+        outs = [dit(p.modified_noise, sigmas[i:i + 1] * 1000, cond[0].unsqueeze(0), {"sampling_sigmas": sigmas}) for i in range(6)]
+        self.assertTrue(all(o.shape == p.modified_noise.shape and torch.isfinite(o).all() for o in outs))
+        layout = next(iter(dit._layouts.values()))
+        self.assertEqual([k for _, _, k in layout.segments], ["text", "video"])
+        with self.assertRaisesRegex(ValueError, "sampler's sigma schedule"):
+            dit(p.modified_noise, sigmas[:1] * 1000, cond[0].unsqueeze(0))
+        image = self.engine.decode_first_stage(p.modified_noise)
+        self.assertEqual(tuple(image.shape), (1, 3, HEIGHT, WIDTH))
+
+    def test_minimax_h3_image_edits_with_its_own_labels_and_sizes(self):
+        self.use_h3_image()
+        p = Img2Img()
+        p.init_images = [Image.new("RGB", (128, 64), "red")]
+        p.prompt = "make Picture 1 a painting"
+        with patch.object(pictures, "H3_IMAGE_VAE_SHORT_EDGE", (64, 128)), patch.object(pictures, "H3_IMAGE_VISION_SHORT_EDGE", 32):
+            cond = self.run_until_sampling(p)
+        # no edit prefix, "Picture 1: " before the vision block, and the model's own picture sizes
+        self.assertEqual((p.prompt, p.denoising_strength, p.h3_request.references), ("make Picture 1 a painting", 1.0, 1))
+        text = self.engine.text_processing_engine_h3
+        self.assertEqual(text.picture_label, "Picture %d: ")
+        self.assertEqual([tuple(i.shape) for i in text.images], [(1, 32, 64, 3)])
+        self.assertEqual([tuple(r.shape) for r in self.engine.references], [(1, 64, 128, 3)])
+        dit = self.engine.forge_objects.unet.model.diffusion_model
+        sigmas = torch.tensor(dit.pdd_sigmas)
+        out = dit(p.modified_noise, sigmas[:1] * 1000, cond[0].unsqueeze(0), {"sampling_sigmas": sigmas})
+        self.assertTrue(torch.isfinite(out).all())
+        layout = next(iter(dit._layouts.values()))
+        self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "video"])
+        # standard img2img starts from the encoded picture, with no audio part
+        sys.modules["modules.shared"].opts.h3_do_reference = False
+        p = Img2Img()
+        self.run_until_sampling(p)
+        self.assertEqual(tuple(p.init_latent.shape), tuple(p.modified_noise.shape))
+        self.assertGreater(float(p.init_latent.abs().sum()), 0.0)
 
     def test_an_edit_brief_is_encoded_as_it_is_and_large_pictures_shrink_for_the_encoder(self):
         self.use_ph3()

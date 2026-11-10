@@ -8,8 +8,9 @@ MIN_SIDE = 64
 # a still image is one video latent frame; its audio stub spans the two audio latents of a single frame at 40 per
 # second (ComfyUI PH3ImageConditioning), sampled with the picture and never decoded
 AUDIO_LATENTS = 2
-# image_1 and up to 7 references (P-H3-Image); pictures the text encoder sees as "<Picture i>"
-MAX_REFERENCES = 8
+# the most pictures an edit takes, the input image included (MiniMax-H3-Image; P-H3-Image takes 8): each profile
+# has its own limit (profiles.Profile.max_pictures)
+MAX_REFERENCES = 16
 
 
 class H3Error(RuntimeError):

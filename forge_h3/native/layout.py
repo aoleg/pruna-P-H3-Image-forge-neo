@@ -1,7 +1,8 @@
 """Packed-sequence geometry of the MiniMax H3 DiT: patching, positions and the segment table.
 
 Ported from ComfyUI comfy/ldm/minimax/model.py. The packed sequence is [text | reference pictures | audio | video];
-the targets are a still image's single latent frame and its audio stub.
+the targets are a still image's single latent frame and, for the audio-video checkpoints, its audio stub.
+MiniMax-H3-Image has no audio stream: [text | reference pictures | image].
 """
 
 import math
@@ -98,7 +99,8 @@ class _Builder:
         g[:, 0] = torch.arange(text_len, dtype=torch.float64)
         self.pos = [g]
         self.img_pos, self.img_update = [], []
-        self.audio_pos, self.audio_update = [], []
+        # never empty for torch.cat: the image model adds no audio rows
+        self.audio_pos, self.audio_update = [torch.zeros(0, dtype=torch.long)], [torch.zeros(0, dtype=torch.bool)]
         self.row = text_len
 
     def add(self, kind, positions, stream, update):
@@ -135,8 +137,9 @@ class PackedLayout:
             b.add("ref_img", g, "image", False)
             cursor += 1.0
 
-        # target audio then target video, always the last two segments
-        b.add("audio", _audio_grid(cursor, audio_t, *target_audio_w), "audio", True)
+        # target audio (none for the image model) then target video, always last
+        if audio_t:
+            b.add("audio", _audio_grid(cursor, audio_t, *target_audio_w), "audio", True)
         b.add("video", _video_grid(latent_t, frame, cursor), "image", True)
 
         self.seq_len = b.row

@@ -142,12 +142,20 @@ def read_header(path):
     return reader(str(path), stat.st_size, stat.st_mtime_ns)
 
 
-# the text encoder and the VAE of P-H3-Image, or of MiniMax H3 itself; the DiT files share one layout
+# the text encoder and the VAE of P-H3-Image, or of MiniMax H3 itself: the audio-video DiT files share one layout.
+# MiniMax-H3-Image is a checkpoint of its own (no audio stream), with the H3 text encoder and a 2D image VAE
 PH3_IMAGE = "ph3-image"
+H3_IMAGE = "h3-image"
 H3 = "h3"
-# P-H3-Image's text encoder carries Pruna's text connector; its decoder makes one frame per latent (3 x 16 x 16)
+# P-H3-Image's text encoder carries Pruna's text connector; the image decoders make one frame per latent
+# (3 x 16 x 16), MiniMax-H3-Image's with 16 heads of 64 (P-H3-Image's has 32)
 TEXT_CONNECTOR = "text_connector.proj.weight"
 STILL_PROJ_OUT = 768
+H3_IMAGE_DECODER_DIM = 1024
+DIT_KEYS = {"video_patch_proj.weight", "condition_proj.weight", "final_layer.video_out.weight"}
+DIT_AUDIO_KEY = "audio_patch_proj.weight"
+# a checkpoint may ask for an attention kernel per block (ComfyUI's comfy_attention); Forge Neo picks one globally
+ATTENTION_KEY = "blocks.0.attn.comfy_attention.config"
 
 
 @dataclass(frozen=True)
@@ -160,8 +168,7 @@ class ModelInfo:
 
 def _role(keys):
     clean = {k.removeprefix("model.diffusion_model.") for k in keys}
-    if {"video_patch_proj.weight", "audio_patch_proj.weight",
-            "final_layer.video_out.weight", "final_layer.audio_out.weight"} <= clean:
+    if DIT_KEYS <= clean:
         return "dit"
     if (any(k.endswith("embed_tokens.weight") for k in keys) and any("visual." in k for k in keys)
             and (any("layers.49." in k for k in keys) or TEXT_CONNECTOR in keys)):
@@ -177,7 +184,10 @@ def _variant(role, header, keys):
     if role == "text_encoder" and TEXT_CONNECTOR in keys:
         return PH3_IMAGE
     if role == "vae" and header.get("decoder.proj_out.weight", {}).get("shape", [0])[0] == STILL_PROJ_OUT:
-        return PH3_IMAGE
+        wide = header.get("decoder.x_embedder.weight", {}).get("shape", [0])[0]
+        return H3_IMAGE if wide == H3_IMAGE_DECODER_DIM else PH3_IMAGE
+    if role == "dit" and DIT_AUDIO_KEY not in {k.removeprefix("model.diffusion_model.") for k in keys}:
+        return H3_IMAGE
     return H3
 
 
@@ -286,9 +296,15 @@ class Components:
 
     @property
     def profile(self):
-        """The recipe of the selected model: the text encoder tells P-H3-Image from H3, the DiT files cannot."""
-        from .profiles import for_text_encoder
-        return for_text_encoder(self.text_encoder.variant)
+        """The recipe of the selected model: MiniMax-H3-Image is told by its checkpoint; the audio-video checkpoints
+        share one layout, so the text encoder tells P-H3-Image from H3."""
+        from .profiles import for_components
+        return for_components(self.dit.variant, self.text_encoder.variant)
+
+    @property
+    def wants_int8_attention(self) -> bool:
+        """Whether the checkpoint declares comfy-kitchen's INT8 attention for its blocks, as ComfyUI then uses."""
+        return ATTENTION_KEY in read_header(self.dit.path)
 
 
 def resolve_components(dit_path, module_paths):
@@ -313,6 +329,17 @@ def resolve_components(dit_path, module_paths):
         if role not in resolved:
             raise H3Error(f"Select the H3 {ROLE_LABELS[role]} in Forge's VAE / Text Encoder field.")
     components = Components(**resolved)
+    if components.dit.variant == H3_IMAGE:
+        if components.text_encoder.variant != H3:
+            raise H3Error("MiniMax-H3-Image uses the MiniMax H3 text encoder (qwen3vl_32b_minimax_h3), not "
+                          "P-H3-Image's: select it under VAE / Text Encoder.")
+        if components.vae.variant != H3_IMAGE:
+            raise H3Error("MiniMax-H3-Image needs its own VAE (minimax_h3_image_vae), whose 2D decoder makes one "
+                          "picture per latent: select it in place of the other VAE.")
+        return components
+    if components.vae.variant == H3_IMAGE:
+        raise H3Error("The MiniMax-H3-Image VAE goes with the MiniMax-H3-Image checkpoint (minimax_h3_image): select "
+                      "that checkpoint, or the VAE of the selected model.")
     if components.vae.variant != components.profile.vae:
         if components.profile.vae == PH3_IMAGE:
             raise H3Error("The P-H3-Image text encoder needs the P-H3-Image VAE (p-h3-image_vae), whose decoder makes "

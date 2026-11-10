@@ -41,12 +41,13 @@ class Panel:
         with gr.Accordion("MiniMax H3", open=False, visible=False, elem_id=f"{self.tab}_h3_panel") as self.accordion:
             self.status = gr.Markdown("Select the H3 text encoder and VAE in VAE / Text Encoder.")
             if is_img2img:
-                gr.Markdown("With **[H3] Enable Reference** on (Settings → MiniMax H3), img2img is a **P-H3-Image edit**: "
-                            "the input image is `<Picture 1>`, the picture to edit; the **ImageStitch Integrated** gallery "
-                            "holds the references, `<Picture 2>` onwards, up to 8 pictures in all. Name them in the prompt "
-                            "(\"the hat from <Picture 2>\"). The picture is generated at Width x Height; Resize mode and "
-                            "Denoising strength are not used. Edits work best at about 4 MP. With the setting off, img2img "
-                            "is Forge's own: the input image is noised at Denoising strength, with any H3 model.")
+                gr.Markdown("With **[H3] Enable Reference** on (Settings → MiniMax H3), img2img is an **edit** with "
+                            "MiniMax-H3-Image or P-H3-Image: the input image is `<Picture 1>`, the picture to edit; the "
+                            "**ImageStitch Integrated** gallery holds the references, `<Picture 2>` onwards (16 pictures "
+                            "in all for MiniMax-H3-Image, 8 for P-H3-Image). Name them in the prompt (\"the hat from "
+                            "<Picture 2>\"). The picture is generated at Width x Height; Resize mode and Denoising "
+                            "strength are not used. With the setting off, img2img is Forge's own: the input image is "
+                            "noised at Denoising strength, with any H3 model.")
             with gr.Accordion("Components", open=False):
                 self.summary = gr.Markdown("")
         self.bound = False
@@ -135,8 +136,9 @@ class Panel:
             if error:
                 status = html.escape(error)
             elif profile is not None:
+                shift = f"Shift {profile.shift:g}, " if profile.shift_used else ""
                 status = (f"{profile.label} makes one still image per generation: {profile.steps} steps, CFG {profile.cfg:g}, "
-                          f"Shift {profile.shift:g}, best at about {profile.size}x{profile.size} (the {profile.name} UI preset).")
+                          f"{shift}best at about {profile.size}x{profile.size} (the {profile.name} UI preset).")
             else:
                 status = "H3 makes one still image per generation."
             return ([gr.update(visible=active), status, summary, saved] + updates

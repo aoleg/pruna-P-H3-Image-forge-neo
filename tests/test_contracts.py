@@ -20,8 +20,14 @@ def checkpoint(path, tensors, metadata=None):
 
 DIT = {"video_patch_proj.weight": ("BF16", [5376, 96]),
        "audio_patch_proj.weight": ("BF16", [5376, 64]),
+       "condition_proj.weight": ("BF16", [5376, 5120]),
        "final_layer.video_out.weight": ("BF16", [96, 5376]),
        "final_layer.audio_out.weight": ("BF16", [64, 5376])}
+# MiniMax-H3-Image: no audio stream, six stacked output heads, INT8 attention declared for its blocks
+H3_IMAGE_DIT = {"video_patch_proj.weight": ("F32", [5376, 96]),
+                "condition_proj.weight": ("BF16", [5376, 5120]),
+                "final_layer.video_out.weight": ("F32", [576, 5376]),
+                "blocks.0.attn.comfy_attention.config": ("U8", [37])}
 TE = {"model.language_model.embed_tokens.weight": ("BF16", [151936, 5120]),
       "model.language_model.layers.49.self_attn.q_proj.weight": ("BF16", [5120, 5120]),
       "model.visual.patch_embed.proj.weight": ("BF16", [1280, 3, 2, 14, 14])}
@@ -36,7 +42,9 @@ PH3_TE = {"model.language_model.embed_tokens.weight": ("BF16", [151936, 2560]),
           "model.language_model.layers.35.self_attn.q_proj.weight": ("BF16", [4096, 2560]),
           "model.visual.patch_embed.proj.weight": ("BF16", [1024, 3, 2, 16, 16]),
           "text_connector.proj.weight": ("F32", [5120, 12800])}
-PH3_VAE = dict(VAE, **{"decoder.proj_out.weight": ("BF16", [768, 2048])})
+PH3_VAE = dict(VAE, **{"decoder.proj_out.weight": ("BF16", [768, 2048]), "decoder.x_embedder.weight": ("BF16", [2048, 24])})
+# MiniMax-H3-Image's VAE: the 2D decoder, 16 heads of 64
+H3_IMAGE_VAE = dict(VAE, **{"decoder.proj_out.weight": ("F16", [768, 1024]), "decoder.x_embedder.weight": ("F16", [1024, 24])})
 
 
 class HeaderTests(unittest.TestCase):
@@ -125,6 +133,27 @@ class HeaderTests(unittest.TestCase):
             resolve_components(dit, [te, checkpoint(self.root / "video.safetensors", VAE)])
         with self.assertRaisesRegex(H3Error, "needs the P-H3-Image text encoder"):
             resolve_components(dit, [checkpoint(self.root / "encoder.safetensors", TE), vae])
+
+    def test_minimax_h3_image_is_told_by_its_checkpoint(self):
+        dit = checkpoint(self.root / "any-name.safetensors", H3_IMAGE_DIT)
+        te, vae = checkpoint(self.root / "te.safetensors", TE), checkpoint(self.root / "v.safetensors", H3_IMAGE_VAE)
+        self.assertEqual((inspect_model(dit).role, inspect_model(dit).variant), ("dit", "h3-image"))
+        self.assertEqual((inspect_model(vae).role, inspect_model(vae).variant), ("vae", "h3-image"))
+        components = resolve_components(dit, [te, vae])
+        profile = components.profile
+        self.assertEqual((profile.name, profile.steps, profile.cfg, profile.scheduler, profile.max_pictures),
+                         ("h3image", 6, 1.0, "Simple", 16))
+        self.assertTrue(components.wants_int8_attention)
+        self.assertFalse(resolve_components(checkpoint(self.root / "model.safetensors", DIT),
+                                            [te, checkpoint(self.root / "video.safetensors", VAE)]).wants_int8_attention)
+        # its parts go together: the H3 text encoder and its own VAE, and that VAE with no other checkpoint
+        with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image uses the MiniMax H3 text encoder"):
+            resolve_components(dit, [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), vae])
+        for other in (VAE, PH3_VAE):
+            with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image needs its own VAE"):
+                resolve_components(dit, [te, checkpoint(self.root / "other.safetensors", other)])
+        with self.assertRaisesRegex(H3Error, "goes with the MiniMax-H3-Image checkpoint"):
+            resolve_components(checkpoint(self.root / "model.safetensors", DIT), [te, vae])
 
 
 def quantized_checkpoint(path, formats, metadata=None, base=DIT, layer="blocks.{i}.mlp.fc1"):
@@ -269,9 +298,9 @@ class RequestTests(unittest.TestCase):
                 GenerationRequest(width=width, height=height)
 
     def test_pictures_are_counted_and_bounded(self):
-        self.assertEqual(GenerationRequest(references=8).references, 8)
-        with self.assertRaisesRegex(H3Error, "up to 8 pictures; 9 were given"):
-            GenerationRequest(references=9)
+        self.assertEqual(GenerationRequest(references=16).references, 16)
+        with self.assertRaisesRegex(H3Error, "up to 16 pictures; 17 were given"):
+            GenerationRequest(references=17)
         with self.assertRaisesRegex(H3Error, "References must be an integer"):
             GenerationRequest(references=1.5)
 

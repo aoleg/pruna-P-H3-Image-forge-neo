@@ -274,7 +274,8 @@ class TransformerBlock(nn.Module):
 
 class ViT3DDecoder(nn.Module):
     def __init__(self, patch_size=16, patch_size_t=4, in_channels=24, out_channels=3, num_layers=36, heads=32,
-                 dim_head=64, rope_theta=100.0, rope_dim_ratio=0.75, bias=True, eps=1e-5, num_register_tokens=4):
+                 dim_head=64, rope_theta=100.0, rope_dim_ratio=0.75, rope_dims=3, bias=True, eps=1e-5,
+                 num_register_tokens=4):
         super().__init__()
         dim = heads * dim_head
         self.patch_size = patch_size
@@ -282,7 +283,8 @@ class ViT3DDecoder(nn.Module):
         self.out_channels = out_channels
         self.num_register_tokens = num_register_tokens
 
-        self.pos_embed = RotaryEmbeddingND(int(dim_head * rope_dim_ratio), rope_theta, n_dim=3)
+        # rope over the trailing rope_dims latent axes of (t, h, w)
+        self.pos_embed = RotaryEmbeddingND(int(dim_head * rope_dim_ratio), rope_theta, n_dim=rope_dims)
         self.x_embedder = nn.Linear(in_channels, dim)
         self.register_tokens = nn.Parameter(torch.empty(1, num_register_tokens, dim))
         # unused at inference; kept so the checkpoint loads without leftover keys
@@ -293,7 +295,7 @@ class ViT3DDecoder(nn.Module):
         self.proj_out = nn.Linear(dim, out_channels * patch_size_t * patch_size * patch_size)
 
     def _token_ids(self, latent_T, latent_H, latent_W, device, dtype):
-        return create_token_ids((latent_T, latent_H, latent_W), device, dtype)
+        return create_token_ids((latent_T, latent_H, latent_W)[-self.pos_embed.n_dim:], device, dtype)
 
     def forward(self, x):
         B, _, latent_T, latent_H, latent_W = x.shape
@@ -304,7 +306,7 @@ class ViT3DDecoder(nn.Module):
         h = torch.cat([h, registers, torch.zeros_like(h[:, 0:1, :])], dim=1)
 
         img_ids = self._token_ids(latent_T, latent_H, latent_W, x.device, x.dtype).expand(B, -1, -1)
-        img_ids = torch.cat([img_ids, torch.zeros((B, num_suffix, 3), device=x.device, dtype=img_ids.dtype)], dim=1)
+        img_ids = torch.cat([img_ids, torch.zeros((B, num_suffix, self.pos_embed.n_dim), device=x.device, dtype=img_ids.dtype)], dim=1)
         rotary_pos_emb = self.pos_embed(img_ids)
 
         for block in self.transformer_blocks:
@@ -336,6 +338,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         tile_overlap_min=64,
         tiling=True,
         num_layers=36,
+        decoder=True,
     ):
         super().__init__()
         self.vae_ratio = int(math.prod(space_down))
@@ -366,13 +369,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         )
         self.quant_conv = nn.Conv3d(z_channels * 2, 2 * embed_dim, 1)
         self.post_quant_conv = nn.Conv3d(embed_dim, z_channels, 1)
+        # the image VAEs attach a decoder of their own
         self.decoder = ViT3DDecoder(
             patch_size=self.vae_ratio,
             patch_size_t=self.vae_ratio_t,
             in_channels=z_channels,
             out_channels=out_ch,
             num_layers=num_layers,
-        )
+        ) if decoder else None
 
         self.register_buffer("latents_mean", torch.tensor(LATENTS_MEAN))
         self.register_buffer("latents_std", torch.tensor(LATENTS_STD))
@@ -720,13 +724,16 @@ class MiniMaxH3VideoVAE(nn.Module):
         return self.decode_temporal(z, output_buffer)
 
 
-# P-H3-Image: the H3 encoder with a single-frame decoder (ComfyUI PH3ImageVAE)
+# The image VAEs: the H3 encoder with a single-frame decoder (ComfyUI H3ImageVAE and its two subclasses)
 
-# rope time coordinate of the decoded frame, and the seed of the posterior sample its encode conditions on
+# P-H3-Image: rope time coordinate of the decoded frame
 PH3_IMAGE_FRAME_POSITION = 2.0 * (0.5 / 7) - 1.0
-PH3_IMAGE_ENCODE_SEED = 42
-# the decoder's output projection: 3 channels x one frame x 16 x 16, where the video decoder makes four frames
-PH3_IMAGE_PROJ_OUT = 3 * 16 * 16
+# the image VAEs condition on a posterior sample; the H3 keyframe recipe's seed
+IMAGE_ENCODE_SEED = 42
+# the decoders' output projection: 3 channels x one frame x 16 x 16, where the video decoder makes four frames
+IMAGE_PROJ_OUT = 3 * 16 * 16
+# MiniMax-H3-Image's decoder is 16 heads of 64 wide, P-H3-Image's 32
+H3_IMAGE_DECODER_DIM = 16 * 64
 
 
 class PH3ImageDecoder(ViT3DDecoder):
@@ -741,11 +748,11 @@ class PH3ImageDecoder(ViT3DDecoder):
         return torch.cat([torch.full_like(ids[..., :1], PH3_IMAGE_FRAME_POSITION), ids], dim=-1)
 
 
-class PH3ImageVAE(MiniMaxH3VideoVAE):
-    def __init__(self, num_layers=36, **kwargs):
-        super().__init__(num_layers=num_layers, **kwargs)
-        self.decoder = PH3ImageDecoder(patch_size=self.vae_ratio, in_channels=self.post_quant_conv.out_channels,
-                                       num_layers=num_layers)
+class H3ImageVAE(MiniMaxH3VideoVAE):
+    """The H3 encoder with a single-frame decoder; subclasses attach the decoder."""
+
+    def __init__(self, **kwargs):
+        super().__init__(decoder=False, **kwargs)
 
     def encode(self, x, device=None):
         # x: [B, 3, 1, H, W] in [-1, 1] -> a normalized posterior sample [B, 24, 1, H/16, W/16]; every picture draws
@@ -755,10 +762,10 @@ class PH3ImageVAE(MiniMaxH3VideoVAE):
         if device is None:
             device = x.device
         if x.shape[2] != 1:
-            raise ValueError(f"The P-H3-Image VAE encodes single pictures only, got {x.shape[2]} frames")
+            raise ValueError(f"This image VAE encodes single pictures only, got {x.shape[2]} frames")
         moments = self._adaptive_encode(self._normalize_pixels(x.to(device)))
         mean, logvar = moments.float().chunk(2, dim=1)
-        noise = torch.randn(mean.shape, generator=torch.Generator().manual_seed(PH3_IMAGE_ENCODE_SEED)).to(mean.device)
+        noise = torch.randn(mean.shape, generator=torch.Generator().manual_seed(IMAGE_ENCODE_SEED)).to(mean.device)
         latents = torch.addcmul(mean, torch.exp(0.5 * logvar.clamp(-30.0, 20.0)), noise)
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(latents)
         latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(latents)
@@ -767,7 +774,7 @@ class PH3ImageVAE(MiniMaxH3VideoVAE):
     def decode(self, z, output_buffer=None):
         # one latent is one frame here: no chunk of copies
         if z.shape[2] != 1:
-            raise ValueError(f"The P-H3-Image VAE decodes single-frame image latents only, got {z.shape[2]} latent frames")
+            raise ValueError(f"This image VAE decodes single-frame image latents only, got {z.shape[2]} latent frames")
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(z)
         latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(z)
         dec = self._finalize_pixels(self._adaptive_decode(z * latents_std + latents_mean))
@@ -775,3 +782,27 @@ class PH3ImageVAE(MiniMaxH3VideoVAE):
             return dec
         output_buffer.copy_(dec)
         return output_buffer
+
+
+class PH3ImageVAE(H3ImageVAE):
+    """P-H3-Image: a 3D-rope ViT decoder at a fixed time coordinate."""
+
+    def __init__(self, num_layers=36, **kwargs):
+        super().__init__(**kwargs)
+        self.decoder = PH3ImageDecoder(patch_size=self.vae_ratio, in_channels=self.post_quant_conv.out_channels,
+                                       num_layers=num_layers)
+
+
+class MiniMaxH3ImageVAE(H3ImageVAE):
+    """MiniMax-H3-Image: a 2D ViT decoder (16 heads, 2D rope over half the head) behind a 2D post-quant conv."""
+
+    def __init__(self, num_layers=24, **kwargs):
+        super().__init__(**kwargs)
+        channels = self.post_quant_conv.out_channels
+        self.post_quant_conv = nn.Conv2d(channels, channels, 1)
+        self.decoder = ViT3DDecoder(patch_size=self.vae_ratio, patch_size_t=1, in_channels=channels, num_layers=num_layers,
+                                    heads=16, rope_dim_ratio=0.5, rope_dims=2)
+
+    def _decode_pixels(self, z):
+        # the 2D post-quant conv takes the single frame; the decoder keeps the video layout with T = 1
+        return self.decoder(self.post_quant_conv(z.squeeze(2)).unsqueeze(2))

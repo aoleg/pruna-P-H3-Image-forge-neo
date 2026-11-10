@@ -4,8 +4,10 @@ import unittest
 
 from forge_h3.profiles import (
     H3,
+    H3_IMAGE,
     PH3_IMAGE,
     PH3_IMAGE_SIGMAS,
+    for_components,
     for_text_encoder,
     ph3_image_sigmas,
 )
@@ -22,6 +24,15 @@ class ProfileTests(unittest.TestCase):
         self.assertIs(for_text_encoder("ph3-image"), PH3_IMAGE)
         self.assertEqual((PH3_IMAGE.name, PH3_IMAGE.steps, PH3_IMAGE.cfg, PH3_IMAGE.shift), ("ph3", 8, 1.0, 1.0))
         self.assertEqual((H3.name, H3.steps, H3.cfg, H3.shift), ("h3", 30, 3.0, 3.0))
+
+    def test_the_image_checkpoint_picks_its_own_profile(self):
+        self.assertIs(for_components("h3-image", "h3"), H3_IMAGE)
+        self.assertIs(for_components("h3", "h3"), H3)
+        self.assertIs(for_components("h3", "ph3-image"), PH3_IMAGE)
+        self.assertEqual((H3_IMAGE.steps, H3_IMAGE.cfg, H3_IMAGE.picture_label, H3_IMAGE.edit_prefix, H3_IMAGE.shift_used),
+                         (6, 1.0, "Picture %d: ", False, False))
+        self.assertEqual((PH3_IMAGE.picture_label, PH3_IMAGE.edit_prefix, PH3_IMAGE.max_pictures, H3.max_pictures),
+                         ("<Picture %d>: ", True, 8, 0))
 
 
 @unittest.skipIf(torch is None, "needs torch")

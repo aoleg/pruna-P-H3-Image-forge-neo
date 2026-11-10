@@ -2,17 +2,19 @@
 
 Accepted files: the Comfy-Org single file (fp16), Kijai's int8 ConvRot video VAE (its decoder transformer linears are
 quantized; Forge's mixed-precision operations load them), the original MiniMax FL2VA file, which lacks the latent
-statistics buffers, and P-H3-Image's VAE (the same encoder with a single-frame decoder, bf16 or int8). The audio VAE
-of the video model is recognized only to be refused: a still image never decodes its audio stub.
+statistics buffers, and the two image VAEs, the same encoder with a single-frame decoder: P-H3-Image's (bf16 or int8)
+and MiniMax-H3-Image's 2D one (it has no latent statistics either). The audio VAE of the video model is recognized
+only to be refused: a still image never decodes it.
 """
 
 import torch
 
-from .video_vae import LATENTS_MEAN, LATENTS_STD, PH3_IMAGE_PROJ_OUT
+from .video_vae import H3_IMAGE_DECODER_DIM, IMAGE_PROJ_OUT, LATENTS_MEAN, LATENTS_STD
 
 VIDEO_KEYS = ("decoder.transformer_blocks.0.scale1", "encoder.down.5.block.0.conv1.weight")
 AUDIO_KEY = "pre_block.attn.zero_k_bias"
 PROJ_OUT = "decoder.proj_out.weight"
+X_EMBEDDER = "decoder.x_embedder.weight"
 QUANT_SUFFIXES = (".comfy_quant", ".weight_scale")
 
 MISSING_VAE = "MiniMax H3 needs its autoencoder: select the H3 VAE under VAE / Text Encoder"
@@ -31,9 +33,18 @@ def is_audio_vae(sd) -> bool:
     return AUDIO_KEY in sd
 
 
+def is_image_vae(sd) -> bool:
+    """An image VAE: its decoder makes one frame per latent (ComfyUI's test on the output projection)."""
+    return PROJ_OUT in sd and _shape(sd[PROJ_OUT])[0] == IMAGE_PROJ_OUT
+
+
+def is_h3_image_vae(sd) -> bool:
+    """MiniMax-H3-Image's VAE: the 16-head 2D decoder (P-H3-Image's has 32 heads)."""
+    return is_image_vae(sd) and X_EMBEDDER in sd and _shape(sd[X_EMBEDDER])[0] == H3_IMAGE_DECODER_DIM
+
+
 def is_ph3_vae(sd) -> bool:
-    """P-H3-Image's VAE: its decoder makes one frame per latent (ComfyUI's test on the output projection)."""
-    return PROJ_OUT in sd and _shape(sd[PROJ_OUT])[0] == PH3_IMAGE_PROJ_OUT
+    return is_image_vae(sd) and not is_h3_image_vae(sd)
 
 
 def is_quantized(sd: dict, prefix: str = "") -> bool:

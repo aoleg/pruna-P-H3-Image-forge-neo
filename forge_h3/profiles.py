@@ -1,4 +1,4 @@
-"""The two kinds of still-image H3 model and their sampling recipes. Torch only, so CPU tests cover it."""
+"""The kinds of still-image H3 model and their sampling recipes. Torch only, so CPU tests cover it."""
 
 from dataclasses import dataclass
 
@@ -8,6 +8,9 @@ PH3_IMAGE_SCHEDULER = "P-H3-Image"
 # the hidden states of the 4B text encoder that Pruna's text connector reads (36 = after the final norm), as Forge's
 # clip wrapper asks the encoder for them
 PH3_IMAGE_HIDDEN_STATES = [13, 19, 25, 31, 36]
+# how the prompt names a picture before its vision block
+PICTURE_LABEL = "<Picture %d>: "
+H3_IMAGE_PICTURE_LABEL = "Picture %d: "
 
 
 @dataclass(frozen=True)
@@ -20,8 +23,16 @@ class Profile:
     cfg: float
     shift: float       # the flow shift of both streams
     size: int          # the recommended side of a square picture
-    text_encoder: str  # the text encoder variant that selects the profile (models.ModelInfo.variant)
+    text_encoder: str  # the text encoder variant it needs (models.ModelInfo.variant)
     vae: str           # the VAE variant it needs
+    dit: str = "h3"    # the checkpoint variant
+    # the edit mode of img2img: how many pictures it takes (0 = none), how the prompt names them, and whether a short
+    # instruction gets "Edit <Picture 1>. " in front
+    max_pictures: int = 0
+    picture_label: str = PICTURE_LABEL
+    edit_prefix: bool = False
+    # whether the Shift slider does anything (a model on its own sigma grid ignores it)
+    shift_used: bool = True
 
 
 # an H3 checkpoint with its own text encoder and VAE, as a still-image model: the recipe of lodestones' chroma-h3
@@ -31,13 +42,26 @@ H3 = Profile(name="h3", label="MiniMax H3", sampler="Euler", scheduler="Simple",
              size=1024, text_encoder="h3", vae="h3")
 # Pruna's P-H3-Image: its 4B text encoder and single-frame VAE, 8 MP output
 PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0, shift=1.0,
-                    size=2912, text_encoder="ph3-image", vae="ph3-image")
+                    size=2912, text_encoder="ph3-image", vae="ph3-image", max_pictures=8, edit_prefix=True)
+# MiniMax's own MiniMax-H3-Image: the H3 DiT without the audio stream, six output heads distilled on the checkpoint's
+# sigma grid (so 6 steps, no CFG, and Simple lands on the grid), the H3 32B text encoder and a 2D image VAE; about
+# 4 to 20 MP, best around 16 MP
+H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler="Simple", steps=6, cfg=1.0, shift=1.0,
+                   size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,
+                   picture_label=H3_IMAGE_PICTURE_LABEL, shift_used=False)
 
+ALL = (H3, PH3_IMAGE, H3_IMAGE)
+# the audio-video checkpoints share one layout: the text encoder tells P-H3-Image from H3
 PROFILES = {profile.text_encoder: profile for profile in (H3, PH3_IMAGE)}
 
 
 def for_text_encoder(variant: str) -> Profile:
     return PROFILES[variant]
+
+
+def for_components(dit: str, text_encoder: str) -> Profile:
+    """The image checkpoint is told by its own tensors; the others by the selected text encoder."""
+    return H3_IMAGE if dit == H3_IMAGE.dit else for_text_encoder(text_encoder)
 
 
 def ph3_image_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):

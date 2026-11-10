@@ -7,7 +7,11 @@ read through shape_of, so no tensor has to be materialized.
 import json
 import re
 
-IDENTITY_KEYS = ("video_patch_proj.weight", "audio_patch_proj.weight")
+# the image checkpoints (MiniMax-H3-Image) have no audio stream
+IDENTITY_KEYS = ("video_patch_proj.weight", "condition_proj.weight", "final_layer.video_out.weight")
+AUDIO_KEY = "audio_patch_proj.weight"
+# the sigma grid of MiniMax-H3-Image's six output heads (pdd_config.json), when a file carries no metadata
+H3_IMAGE_PDD_SIGMAS = (1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0)
 
 
 def shape_of(value):
@@ -36,12 +40,18 @@ def detect(state_dict, key_prefix="", metadata=None):
         return shape_of(state_dict[f"{key_prefix}{key}"])
 
     keys = list(state_dict.keys())
+    audio = f"{key_prefix}{AUDIO_KEY}" in state_dict
     config = {"image_model": "minimax_h3"}
     config["num_layers"] = count_blocks(keys, f"{key_prefix}blocks.")
     config["token_refiner_num_layers"] = count_blocks(keys, f"{key_prefix}token_refiner.blocks.")
     config["hidden_size"] = shape("video_patch_proj.weight")[0]
-    config["latents_dim"] = shape("final_layer.video_out.weight")[0] // 4  # patch 1x2x2
-    config["audio_latents_dim"] = shape("final_layer.audio_out.weight")[0]
+    config["latents_dim"] = shape("video_patch_proj.weight")[1] // 4  # patch 1x2x2
+    # a PDD checkpoint stacks pdd_steps output heads per stream
+    config["pdd_steps"] = shape("final_layer.video_out.weight")[0] // (config["latents_dim"] * 4)
+    config["audio_latents_dim"] = shape("final_layer.audio_out.weight")[0] // config["pdd_steps"] if audio else None
+    if config["pdd_steps"] == len(H3_IMAGE_PDD_SIGMAS) - 1:
+        # the file's own grid replaces this when the loader has its metadata (patches._hook_metadata)
+        config["pdd_sigmas"] = list(H3_IMAGE_PDD_SIGMAS)
     config["attention_head_dim"] = shape("blocks.0.attn.q_norm.weight")[0]
     config["num_attention_heads"] = shape("blocks.0.attn.qkv_proj.weight")[0] // (3 * config["attention_head_dim"])
     config["ffn_hidden_size"] = shape("blocks.0.mlp.fc1.weight")[0] // 2

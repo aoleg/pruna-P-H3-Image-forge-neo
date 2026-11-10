@@ -15,6 +15,7 @@ from backend.patcher.unet import UnetPatcher
 from backend.patcher.vae import VAE
 
 from ..contracts import H3Error, raise_pending_error
+from ..profiles import PICTURE_LABEL
 from .layout import prompt_memory
 from .model import SHIFT, MiniMaxH3
 from .streams import Generation, still_shapes
@@ -30,9 +31,11 @@ def encode_memory(shape, dtype) -> int:
 # Forge sizes the sampling headroom from the packed latent's element count (about 100k for a 1 MP still, halved
 # again for INT8 models), which left 1.2 GB free next to a resident text encoder on a 32 GB card. The DiT's working
 # memory scales with its sequence instead: fp32 rows, the 28672-wide MLP activations, INT8 activation buffers and
-# the allocator's slack, about 1 MB per token in that run. The reservation below is what Forge keeps free when it
-# loads the DiT for sampling, so the text encoder leaves VRAM (partly or wholly) when the two do not fit together.
-SAMPLING_BYTES_PER_TOKEN = 1536 * 1024
+# the allocator's slack: a few hundred KB per token by the layers' widths, kept with a margin until a measured run
+# says more (the first sampling step prints it). The reservation below is what Forge keeps free when it loads the DiT
+# for sampling, so the text encoder leaves VRAM (partly or wholly) when the two do not fit together. MiniMax-H3-Image
+# at 16 MP is 16k image tokens: twice the figure would push most of the DiT itself out of a 32 GB card.
+SAMPLING_BYTES_PER_TOKEN = 768 * 1024
 SAMPLING_FIXED_BYTES = 1024 * 1024 * 1024
 # the prompt's share of the sequence is not known when the reservation is made; a long edit brief is a few hundred
 TEXT_TOKENS_RESERVED = 1024
@@ -97,7 +100,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         vae.latent_channels = 24
 
         unet = UnetPatcher.from_model(model=huggingface_components["transformer"], diffusers_scheduler=None,
-                                      k_predictor=self._get_predictor(), config=estimated_config)
+                                      k_predictor=self._h3_predictor(estimated_config), config=estimated_config)
 
         self.text_processing_engine_h3 = MiniMaxH3TextEngine(text_encoder=clip.cond_stage_model.qwen3vl_32b,
                                                              tokenizer=clip.tokenizer.qwen3vl_32b)
@@ -118,19 +121,36 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         # Reference setting off); otherwise the input image is <Picture 1> and encode_first_stage is a placeholder
         self.img2img_input = False
 
-    def set_references(self, references) -> None:
+    def _h3_predictor(self, estimated_config):
+        """MiniMax-H3-Image samples on the sigma grid its output heads were distilled on; the others on Forge's
+        shifted flow schedule."""
+        config = getattr(estimated_config, "unet_config", None) or {}
+        if config.get("pdd_steps", 1) > 1 and config.get("pdd_sigmas"):
+            from .sampling import PredictionH3Image
+            return PredictionH3Image(estimated_config, config["pdd_sigmas"])
+        return self._get_predictor()
+
+    @property
+    def has_audio(self) -> bool:
+        """Whether the checkpoint has H3's audio stream (MiniMax-H3-Image has none): the packed latent then carries
+        the two-step audio stub next to the picture."""
+        return getattr(self.forge_objects.unet.model.diffusion_model, "audio_latents_dim", 32) is not None
+
+    def set_references(self, references, vision=None, picture_label: str = PICTURE_LABEL) -> None:
         """Called by the script for every generation, before Forge encodes the prompt: (1, h, w, 3) pictures in
-        [0, 1], each already within the output area, in "<Picture i>" order."""
+        [0, 1] as the VAE takes them, in "<Picture i>" order, the copies the text encoder sees (made within 1 MP
+        when not given) and the label the prompt gives each."""
         self.references = list(references or ())
+        self.vision_pictures = [vision_copy(image) for image in self.references] if vision is None else list(vision)
+        self.picture_label = picture_label
 
     def set_img2img(self, standard: bool) -> None:
         """Called by the script for every generation: whether Forge's img2img input image starts the sampling."""
         self.img2img_input = bool(standard)
 
     def condition_images(self) -> list[torch.Tensor]:
-        """The pictures the text encoder sees before the prompt as "<Picture i>", each within 1 MP (ComfyUI
-        PH3ImageConditioning's vision copies)."""
-        return [vision_copy(image) for image in self.references]
+        """The pictures the text encoder sees before the prompt as "<Picture i>" (ComfyUI's vision copies)."""
+        return list(getattr(self, "vision_pictures", ()))
 
     def set_shift(self, shift, *args, **kwargs):
         # Forge Neo after d70373e also passes the size (width, height); H3's shift does not depend on it
@@ -140,7 +160,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
 
     def prepare(self, width: int, height: int, seed: int) -> tuple[int, ...]:
         """Start a generation: remember its shapes; returns the shape of the packed latent (without the batch)."""
-        shapes = still_shapes(width, height)
+        shapes = still_shapes(width, height, audio=self.has_audio)
         # each reference on its own grid (ComfyUI MiniMaxH3ReferenceToVideo's ref_blocks)
         refs = [{"kind": "image", "latent_h": image.shape[1] // 16, "latent_w": image.shape[2] // 16, "latent": latent}
                 for image, latent in zip(self.references, self._encode_images(self.references))]
@@ -190,7 +210,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         pictures = [tuple(image.shape[-3:-1]) for image in images]
         memory_management.load_models_gpu([self.forge_objects.clip.patcher], memory_required=prompt_memory(pictures))
         # the same pictures for the prompt and the negative prompt: they come before either text
-        return self.text_processing_engine_h3(prompt, images=images)
+        return self.text_processing_engine_h3(prompt, images=images, picture_label=getattr(self, "picture_label", PICTURE_LABEL))
 
     @torch.inference_mode()
     def get_prompt_lengths_on_ui(self, prompt: str) -> tuple[int, int]:
@@ -206,7 +226,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         if not getattr(self, "img2img_input", False):
             return torch.zeros((1, 1, 1, 1), device=x.device)
         height, width = x.shape[-2], x.shape[-1]
-        shapes = still_shapes(width, height)
+        shapes = still_shapes(width, height, audio=self.has_audio)
         vae = self.forge_objects.vae
         memory_management.load_models_gpu([vae.patcher], memory_required=encode_memory((1, 3, 1, height, width), vae.vae_dtype))
         pixels = x[:1].unsqueeze(2).to(vae.device, vae.vae_dtype)  # [1, 3, 1, H, W]

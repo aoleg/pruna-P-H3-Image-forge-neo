@@ -1,4 +1,4 @@
-"""The "h3" and "ph3" UI presets, added at runtime: PresetArch gains a member per profile and the preset's options
+"""The "h3", "ph3" and "h3image" UI presets, added at runtime: PresetArch gains a member per profile and the preset's options
 are registered through Forge Neo's own presets.register, so they match every other preset (as in the Qwen-Image 2.1
 extension). The P-H3-Image schedule joins Forge's scheduler list the same way.
 """
@@ -7,9 +7,9 @@ from enum import Enum
 
 from modules_forge import presets
 
-from ..profiles import H3, PH3_IMAGE, PH3_IMAGE_SCHEDULER, ph3_image_sigmas
+from ..profiles import ALL, PH3_IMAGE_SCHEDULER, ph3_image_sigmas
 
-PROFILES = (H3, PH3_IMAGE)
+PROFILES = ALL
 PRESETS = tuple(profile.name for profile in PROFILES)
 
 
@@ -45,7 +45,9 @@ def register() -> None:
         presets.SCHEDULERS[arch] = profile.scheduler
         presets.STEPS[arch] = profile.steps
         presets.CFG[arch] = profile.cfg
-        presets.SHIFT[arch] = profile.shift
+        # a negative shift hides the Shift slider by default (Forge's own convention): a model on its own sigma
+        # grid ignores it
+        presets.SHIFT[arch] = profile.shift if profile.shift_used else -abs(profile.shift)
 
     from modules import shared
 

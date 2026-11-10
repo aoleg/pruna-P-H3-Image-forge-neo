@@ -5,6 +5,7 @@ Every hook hands anything that is not MiniMax H3 to the original Forge Neo funct
 
 import contextlib
 import functools
+import json
 import logging
 import os
 from types import SimpleNamespace
@@ -24,7 +25,7 @@ from .engine import MiniMaxH3Engine
 from .islands import floating_dtype, fp32_islands, restore_fp32
 from .text_encoder import PH3ImageQwen3VL, Qwen3VL32B
 from .transformer import MiniMaxH3Model
-from .video_vae import MiniMaxH3VideoVAE, PH3ImageVAE
+from .video_vae import MiniMaxH3ImageVAE, MiniMaxH3VideoVAE, PH3ImageVAE
 
 logger = logging.getLogger("forge_h3")
 
@@ -106,6 +107,24 @@ def _hook_detection() -> None:
     detection.detect_unet_config = detect_unet_config
 
 
+def _hook_metadata() -> None:
+    # Forge reads a checkpoint's metadata but detects the model from its tensors alone; MiniMax-H3-Image keeps the
+    # sigma grid of its output heads in the metadata ("config": {"transformer": {"pdd_steps", "pdd_sigmas"}})
+    original = loader._load_unet
+
+    @functools.wraps(original)
+    def _load_unet(path):
+        sd, metadata, guess = original(path)
+        if isinstance(guess, model.MiniMaxH3) and metadata and "config" in metadata:
+            try:
+                guess.unet_config.update(json.loads(metadata["config"]).get("transformer", {}))
+            except (ValueError, AttributeError, TypeError) as e:
+                logger.warning(f"[MiniMax H3] could not read the checkpoint's config metadata: {e}")
+        return sd, metadata, guess
+
+    loader._load_unet = _load_unet
+
+
 def _replace(sd: dict, prefix: str, asd: dict) -> None:
     for k in [k for k in sd if k.startswith(prefix)]:
         del sd[k]
@@ -134,8 +153,12 @@ def _load_vae(state_dict: dict) -> MiniMaxH3VideoVAE:
     if not isinstance(state_dict, dict) or not vae.is_video_vae(state_dict):
         raise ValueError(vae.MISSING_VAE)
     layers = vae.video_layers(state_dict)
-    # P-H3-Image's VAE decodes one frame per latent; the video VAE is Comfy-Org's, Kijai's or MiniMax's own
-    cls = PH3ImageVAE if vae.is_ph3_vae(state_dict) else MiniMaxH3VideoVAE
+    # the image VAEs decode one frame per latent (MiniMax-H3-Image's with a 2D decoder, P-H3-Image's at a fixed
+    # time coordinate); the video VAE is Comfy-Org's, Kijai's or MiniMax's own
+    if vae.is_h3_image_vae(state_dict):
+        cls = MiniMaxH3ImageVAE
+    else:
+        cls = PH3ImageVAE if vae.is_ph3_vae(state_dict) else MiniMaxH3VideoVAE
     with no_init_weights():
         if vae.is_quantized(state_dict):
             # an int8 VAE (Kijai's, Pruna's): Forge's mixed-precision operations read each layer's comfy_quant
@@ -300,6 +323,11 @@ def apply() -> None:
         return
 
     _hook_detection()
+    try:
+        _hook_metadata()
+    except Exception as e:
+        # MiniMax-H3-Image then samples on its published sigma grid (detect.H3_IMAGE_PDD_SIGMAS)
+        logger.warning(f"[MiniMax H3] could not read checkpoint metadata through the loader: {e}")
     if model.MiniMaxH3 not in model_list.models:
         model_list.models.append(model.MiniMaxH3)
     if MiniMaxH3Engine not in loader.possible_models:
@@ -327,7 +355,7 @@ def apply() -> None:
         presets.register()
     except Exception as e:
         # the model still works without the presets: the panel applies each profile's sampler, schedule and CFG
-        logger.warning(f"[MiniMax H3] could not add the h3 and ph3 UI presets: {e}")
+        logger.warning(f"[MiniMax H3] could not add the h3, ph3 and h3image UI presets: {e}")
 
     _applied = True
     print(f"[MiniMax H3] native backend enabled (torch {torch.__version__}, {os.path.basename(model.CONFIG_DIR)})")

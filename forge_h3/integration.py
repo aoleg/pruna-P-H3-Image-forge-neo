@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import pictures
 from .contracts import GenerationRequest, H3Error, set_pending_error
-from .models import PH3_IMAGE, inspect_model, resolve_components
+from .models import inspect_model, resolve_components
 
 # StableDiffusionProcessing.distilled_cfg_scale when a request does not set it
 API_DEFAULT_DISTILLED_CFG = 3.5
@@ -98,17 +98,18 @@ def validate_img2img(p, components, reference):
         raise H3Error(f"Add an input image for H3 in img2img: it becomes {role}.")
     if getattr(p, "resize_mode", 0) == LATENT_UPSCALE:
         raise H3Error("H3 does not take the latent upscale resize mode. Choose another Resize mode.")
-    if reference and components.text_encoder.variant != PH3_IMAGE:
-        raise H3Error(f"{components.profile.label} has no edit mode: references need P-H3-Image (its text encoder "
-                      "and VAE). Turn off [H3] Enable Reference in Settings for standard img2img.")
+    if reference and not components.profile.max_pictures:
+        raise H3Error(f"{components.profile.label} has no edit mode: references need MiniMax-H3-Image or P-H3-Image. "
+                      "Turn off [H3] Enable Reference in Settings for standard img2img.")
 
 
 _precision_noted = False
 
 
-def note_precision_flags():
-    """Once per session: Forge flags that run below the precision of the models' ComfyUI reference, which an
-    8-step distilled model shows in its fine detail."""
+def note_precision_flags(components=None):
+    """Once per session: where Forge's launch flags differ from the models' ComfyUI reference. A checkpoint that
+    declares INT8 attention for its blocks (MiniMax-H3-Image) runs it in ComfyUI by default, and in Forge Neo only
+    with --use-ck-attention; for the others the flag runs below the reference's precision."""
     global _precision_noted
     if _precision_noted:
         return
@@ -118,7 +119,11 @@ def note_precision_flags():
     except ImportError:
         return
     notes = []
-    if getattr(args, "use_ck_attention", False):
+    declared = components is not None and components.wants_int8_attention
+    if declared and not getattr(args, "use_ck_attention", False):
+        print(f"[MiniMax H3] note: {components.dit.path.name} asks for comfy-kitchen's INT8 attention, which ComfyUI "
+              "then uses; Forge Neo runs it with --use-ck-attention (faster, less VRAM at large sizes).")
+    if getattr(args, "use_ck_attention", False) and not declared:
         notes.append("--use-ck-attention runs INT8 attention in the DiT and the VAE decoder")
     if getattr(args, "fast_fp16", False):
         notes.append("--fast-fp16 accumulates fp16 matmuls in fp16 (the VAE decoder, a fp16 text encoder)")
@@ -134,22 +139,24 @@ def _before_process(p):
         return
     from modules import processing, shared
     validate_processing(p)
-    note_precision_flags()
     overrides = getattr(p, "override_settings", {})
     components = resolve_components(info.filename, module_paths(overrides.get("forge_additional_modules", shared.opts.forge_additional_modules)))
-    refs = []
+    note_precision_flags(components)
+    profile = components.profile
+    refs, vision = [], []
     p.h3_standard_img2img = False
     detail = ""
     if isinstance(p, processing.StableDiffusionProcessingImg2Img):
         reference = reference_mode()
         validate_img2img(p, components, reference)
         if reference:
-            # the original pictures, each within the output area for the VAE (ComfyUI PH3ImageConditioning); the text
-            # encoder's 1 MP copies are made from these by the engine
-            refs = [pictures.prepare(image, p.width * p.height) for image in pictures.collect(p)]
+            # the original pictures, sized for the VAE and for the text encoder as the model's ComfyUI node does
+            images = pictures.collect(p, profile.max_pictures, profile.label)
+            refs, vision = pictures.edit_inputs(profile, images, p.width, p.height)
             # the model generates the whole picture from noise, conditioned on <Picture 1>: the input image is never noised
             p.denoising_strength = 1.0
-            p.prompt = pictures.edit_prompt(p.prompt)
+            if profile.edit_prefix:
+                p.prompt = pictures.edit_prompt(p.prompt)
             detail = f", editing <Picture 1> with {len(refs)} pictures"
         else:
             # Forge's own img2img: the input image is encoded (engine.encode_first_stage) and noised at Denoising strength
@@ -159,7 +166,8 @@ def _before_process(p):
     p.h3_request = request
     p.h3_components = components
     p.h3_references = refs
-    print(f"[MiniMax H3] {components.profile.label}: still image at {request.width}x{request.height}{detail}")
+    p.h3_vision = vision
+    print(f"[MiniMax H3] {profile.label}: still image at {request.width}x{request.height}{detail}")
 
 
 def process(p):
@@ -175,12 +183,12 @@ def process(p):
     # Forge caches the conditioning by prompt, which knows nothing of the pictures before it
     if refs or engine.condition_images():
         p.clear_prompt_cache()
-    engine.set_references(refs)
+    profile = p.h3_components.profile
+    engine.set_references(refs, getattr(p, "h3_vision", None) if refs else None, profile.picture_label)
     engine.set_img2img(getattr(p, "h3_standard_img2img", False))
     if request.references:
         p.extra_generation_params["H3 Edit pictures"] = request.references
 
-    profile = p.h3_components.profile
     p.extra_generation_params["H3 Model"] = profile.label
     if getattr(shared.opts, "forge_preset", None) != profile.name:
         # outside the profile's preset the slider is another model's Shift or Distilled CFG; keep the profile's own

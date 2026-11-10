@@ -1,6 +1,7 @@
 """The packed latent of an H3 still image: video [1, 24, 1, H/16, W/16] and the audio stub [1, 32, 2, 2] in one tensor.
 
 Forge's sampler works on one tensor; ComfyUI packs the two streams the same way (comfy.utils.pack_latents).
+MiniMax-H3-Image has no audio stream: its audio part is empty, [1, 32, 2, 0], and the packed latent is the picture's.
 """
 
 import math
@@ -40,9 +41,9 @@ class StreamShapes:
         return flat[:, :n].reshape(b, *self.video[1:]), flat[:, n:].reshape(b, *self.audio[1:])
 
 
-def still_shapes(width: int, height: int) -> StreamShapes:
+def still_shapes(width: int, height: int, audio: bool = True) -> StreamShapes:
     return StreamShapes(video=(1, LATENT_CHANNELS, 1, height // SPATIAL, width // SPATIAL),
-                        audio=(1, AUDIO_CHANNELS, 2, AUDIO_LATENTS))
+                        audio=(1, AUDIO_CHANNELS, 2, AUDIO_LATENTS if audio else 0))
 
 
 def text_token_tags(text_len: int, spans) -> torch.Tensor | None:

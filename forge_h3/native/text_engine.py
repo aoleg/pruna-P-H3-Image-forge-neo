@@ -10,7 +10,7 @@ from backend.args import dynamic_args
 from backend.text_processing import emphasis
 from backend.text_processing._comfy import EMBEDDINGS, INF, SDClipModel, SDTokenizer
 
-from ..profiles import PH3_IMAGE_HIDDEN_STATES
+from ..profiles import PH3_IMAGE_HIDDEN_STATES, PICTURE_LABEL
 
 PAD = 151643
 VISION_START = 151652
@@ -57,7 +57,7 @@ class MiniMaxH3TextEngine:
     def tokenize(self, texts: str | list[str]) -> EMBEDDINGS | list[EMBEDDINGS]:
         return self.tokenizer.tokenizer(texts, add_special_tokens=False)["input_ids"]
 
-    def __call__(self, texts: list[str], images: list = ()) -> list:
+    def __call__(self, texts: list[str], images: list = (), picture_label: str = PICTURE_LABEL) -> list:
         if any(emphasis.uses_emphasis(text) for text in texts):
             dynamic_args.last_extra_generation_params["Emphasis"] = "None"
 
@@ -66,13 +66,14 @@ class MiniMaxH3TextEngine:
         self.vision_spans = []
         for line in texts:
             if line not in cache:
-                cache[line] = self.text_encoder.encode_token_weights(self.tokens(line, images))[0]
+                cache[line] = self.text_encoder.encode_token_weights(self.tokens(line, images, picture_label))[0]
                 self.vision_spans = vision_spans(self.text_encoder.image_spans)
             zs.extend(cache[line])  # (L, D) per prompt; the prompt parser stacks the batch
         return zs
 
-    def tokens(self, text: str, images=()) -> list[list[tuple]]:
-        """images: (1, h, w, 3) tensors in [0, 1], in <Picture i> order."""
+    def tokens(self, text: str, images=(), picture_label: str = PICTURE_LABEL) -> list[list[tuple]]:
+        """images: (1, h, w, 3) tensors in [0, 1], in <Picture i> order; picture_label names each one before its
+        vision block ("<Picture %d>: " for H3 and P-H3-Image, "Picture %d: " for MiniMax-H3-Image)."""
         entries = []
 
         def add_text(segment):
@@ -84,7 +85,7 @@ class MiniMaxH3TextEngine:
             entries.extend(batches[0])
 
         for i, image in enumerate(images):
-            add_text(f"<Picture {i + 1}>: ")
+            add_text(picture_label % (i + 1))
             embed = {"type": "image", "data": image, "original_type": "image"}
             entries.extend([(VISION_START, 1.0), (embed, 1.0), (VISION_END, 1.0)])
         add_text(text)

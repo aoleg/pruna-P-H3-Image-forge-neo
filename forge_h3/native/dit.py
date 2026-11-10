@@ -2,7 +2,7 @@
 
 Ported from ComfyUI comfy/ldm/minimax/model.py (see native.COMFYUI_COMMIT). Single-stream packed-token
 transformer denoising video (24ch, patch 1x2x2) and audio (32ch) latents jointly, conditioned on Qwen3-VL hidden
-states. The model itself is in transformer.py.
+states; MiniMax-H3-Image is the same stack without the audio stream. The model itself is in transformer.py.
 
 Layers are plain torch modules: inside Forge's using_forge_operations they become Forge operations (dtype,
 quantization, offload, LoRA), outside it they stay torch modules for CPU tests. ComfyUI's prefetch queue, block
@@ -177,19 +177,28 @@ class DiTBlock(nn.Module):
 
 
 class FinalLayer(nn.Module):
-    def __init__(self, hidden, t_dim, video_dim, audio_dim, eps, apply_silu=True, adaln_dtype=None,
+    def __init__(self, hidden, t_dim, video_dim, audio_dim, eps, apply_silu=True, adaln_dtype=None, pdd_steps=1,
                  dtype=None, device=None):
         super().__init__()
         self.norm = nn.RMSNorm(hidden, eps=eps, dtype=dtype, device=device)
         self.adaln_proj = AdalnProj(t_dim, hidden, 2, 1, apply_silu=apply_silu,
                                     dtype=adaln_dtype if adaln_dtype is not None else dtype, device=device)
-        # output heads are the checkpoint's fp32 island; norm/adaln are stored at model dtype
+        # output heads are the checkpoint's fp32 island; norm/adaln are stored at model dtype. A PDD checkpoint
+        # (MiniMax-H3-Image) ships pdd_steps stacked heads; the image model has no audio head
         self.video_dim = video_dim
-        self.video_out = nn.Linear(hidden, video_dim, bias=True, dtype=torch.float32, device=device)
-        self.audio_out = nn.Linear(hidden, audio_dim, bias=True, dtype=torch.float32, device=device)
+        self.video_out = nn.Linear(hidden, video_dim * pdd_steps, bias=True, dtype=torch.float32, device=device)
+        self.audio_out = None
+        if audio_dim is not None:
+            self.audio_out = nn.Linear(hidden, audio_dim * pdd_steps, bias=True, dtype=torch.float32, device=device)
 
-    def forward(self, x, t_emb, video_seg, audio_seg):
-        # video_seg / audio_seg: (start, stop, row) of the target streams, where row is a mod-row index
+    @property
+    def pdd_steps(self) -> int:
+        return self.video_out.weight.shape[0] // self.video_dim
+
+    def forward(self, x, t_emb, video_seg, audio_seg=None, sigma=None, sample_sigmas=None, grid=None):
+        """video_seg / audio_seg: (start, stop, row) of the target streams, where row is a mod-row index. With a PDD
+        head bank: sigma is the step's sigma, sample_sigmas the sampler's schedule and grid the decreasing sigma grid
+        (pdd_steps + 1 points) the heads were distilled on."""
         shift, scale = self.adaln_proj(t_emb)
 
         def mod(seg):
@@ -197,4 +206,38 @@ class FinalLayer(nn.Module):
             out = self.norm(x[a:b]) * (1.0 + _mod_row(scale, row, scale.dtype)) + _mod_row(shift, row, shift.dtype)
             return out.to(torch.float32)
 
-        return self.video_out(mod(video_seg)), self.audio_out(mod(audio_seg))
+        n = self.pdd_steps
+        if n == 1:
+            return self.video_out(mod(video_seg)), (self.audio_out(mod(audio_seg)) if audio_seg is not None else None)
+
+        if audio_seg is not None:
+            raise ValueError("MiniMax H3 PDD heads are supported for the image model only")
+        start, stop = pdd_span(grid, sigma, sample_sigmas)
+        return _pdd_head(self.video_out, mod(video_seg), grid, start, stop), None
+
+
+def pdd_span(grid, sigma, sample_sigmas) -> tuple[int, int]:
+    """The grid intervals [start, stop) a sampler step covers: from the grid point nearest its sigma to the one
+    nearest the next sigma of the schedule, one interval at least."""
+    if grid is None or sample_sigmas is None:
+        raise ValueError("MiniMax H3 PDD heads need the sampler's sigma schedule and the checkpoint's sigma grid")
+    n = len(grid) - 1
+    sigma = float(sigma)
+    i = int((sample_sigmas.to(torch.float32).cpu() - sigma).abs().argmin())
+    sigma_next = float(sample_sigmas[min(i + 1, sample_sigmas.shape[0] - 1)])
+    start, stop = (min(range(n + 1), key=lambda k: abs(grid[k] - s)) for s in (sigma, sigma_next))
+    start = min(start, n - 1)
+    return start, max(stop, start + 1)
+
+
+def _pdd_head(head, h, grid, start, stop):
+    # PDD head bank: row block 0 is a full head, later blocks are offsets from it; the step from grid[start] to
+    # grid[stop] takes the dt-weighted mean of the heads it spans
+    dt = [grid[k] - grid[k + 1] for k in range(start, stop)]
+    w = torch.tensor(dt, dtype=h.dtype, device=h.device) / sum(dt)
+    with kernels.weight_and_bias(head, h) as (weight, bias):
+        rows = weight.reshape(len(grid) - 1, -1, weight.shape[1])
+        brows = bias.reshape(len(grid) - 1, -1)
+        first = max(start, 1)
+        return nn.functional.linear(h, rows[0] + torch.einsum("n,noi->oi", w[first - start:], rows[first:stop]),
+                                    brows[0] + torch.einsum("n,no->o", w[first - start:], brows[first:stop]))
