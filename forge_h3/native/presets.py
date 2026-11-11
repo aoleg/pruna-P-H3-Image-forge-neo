@@ -1,13 +1,13 @@
-"""The "h3", "ph3" and "h3image" UI presets, added at runtime: PresetArch gains a member per profile and the preset's options
+"""The "ph3" and "h3image" UI presets, added at runtime: PresetArch gains a member per profile and the preset's options
 are registered through Forge Neo's own presets.register, so they match every other preset (as in the Qwen-Image 2.1
-extension). The P-H3-Image schedule joins Forge's scheduler list the same way.
+extension). The P-H3-Image and H3-Image schedules join Forge's scheduler list the same way.
 """
 
 from enum import Enum
 
 from modules_forge import presets
 
-from ..profiles import ALL, PH3_IMAGE_SCHEDULER, ph3_image_sigmas
+from ..profiles import ALL, SCHEDULERS
 
 PROFILES = ALL
 PRESETS = tuple(profile.name for profile in PROFILES)
@@ -59,14 +59,16 @@ def register() -> None:
 
 
 def register_scheduler() -> None:
-    """Pruna's 8-step grid as a Forge schedule, before the UI lists the schedules."""
+    """The models' own schedules as Forge schedules, before the UI lists the schedules."""
     from modules import sd_schedulers
 
-    if any(s.label == PH3_IMAGE_SCHEDULER for s in sd_schedulers.all_schedulers):
-        return
-    scheduler = sd_schedulers.Scheduler("ph3_image", PH3_IMAGE_SCHEDULER, ph3_image_sigmas)
-    sd_schedulers.all_schedulers.append(scheduler)
-    if scheduler.label not in getattr(sd_schedulers.shared.opts, "hide_schedulers", ()):
-        sd_schedulers.schedulers.append(scheduler)
-        sd_schedulers.schedulers_map[scheduler.name] = scheduler
-        sd_schedulers.schedulers_map[scheduler.label] = scheduler
+    hidden = getattr(sd_schedulers.shared.opts, "hide_schedulers", ())
+    for name, label, function in SCHEDULERS:
+        if any(s.label == label for s in sd_schedulers.all_schedulers):
+            continue
+        scheduler = sd_schedulers.Scheduler(name, label, function)
+        sd_schedulers.all_schedulers.append(scheduler)
+        if scheduler.label not in hidden:
+            sd_schedulers.schedulers.append(scheduler)
+            sd_schedulers.schedulers_map[scheduler.name] = scheduler
+            sd_schedulers.schedulers_map[scheduler.label] = scheduler

@@ -101,15 +101,15 @@ class CheckpointLayoutTests(unittest.TestCase):
     def test_minimax_h3_image_vae_matches_the_published_file(self):
         from forge_h3.models import H3_IMAGE, _role, _variant
         from forge_h3.native import vae
-        from forge_h3.native.video_vae import MiniMaxH3ImageVAE
+        from forge_h3.native.image_vae import MiniMaxH3ImageVAE
         header = self.headers["minimax_h3_image_vae_fp16"]
-        self.assertTrue(vae.is_video_vae(header) and vae.is_image_vae(header) and vae.is_h3_image_vae(header))
+        self.assertTrue(vae.is_h3_vae(header) and vae.is_image_vae(header) and vae.is_h3_image_vae(header))
         self.assertFalse(vae.is_ph3_vae(header))
         self.assertTrue(vae.is_ph3_vae(self.headers["p-h3-image_vae_bf16"]))
         self.assertFalse(vae.is_h3_image_vae(self.headers["p-h3-image_vae_bf16"]))
-        self.assertEqual(vae.video_layers(header), 24)
+        self.assertEqual(vae.decoder_layers(header), 24)
         # the release file has no latent statistics: the loader adds H3's
-        converted = vae.convert_video_vae(meta_state_dict(header))
+        converted = vae.with_latent_stats(meta_state_dict(header))
         with torch.device("meta"):
             model = MiniMaxH3ImageVAE(num_layers=24)
         self.assertEqual({k: tuple(v.shape) for k, v in model.state_dict().items()},
@@ -124,19 +124,25 @@ class CheckpointLayoutTests(unittest.TestCase):
         from forge_h3.native.detect import detect
         self.assertIsNone(detect(self.headers["minimax_h3_video_vae_fp16"]))
 
-    def test_comfy_org_vae_matches(self):
-        from forge_h3.native.video_vae import MiniMaxH3VideoVAE
-        with torch.device("meta"):
-            self.assertEqual(layout_problems(MiniMaxH3VideoVAE(), self.headers["minimax_h3_video_vae_fp16"]), [])
+    def test_the_video_vae_is_told_apart_from_the_image_vaes(self):
+        # the same encoder, a decoder that makes four frames per latent: recognized, and refused by the loader
+        from forge_h3.native import vae
+        for name in ("minimax_h3_video_vae_fp16", "minimax_original_video_vae"):
+            header = self.headers[name]
+            self.assertTrue(vae.is_h3_vae(header))
+            self.assertFalse(vae.is_image_vae(header) or vae.is_ph3_vae(header) or vae.is_h3_image_vae(header))
+            self.assertEqual(vae.decoder_layers(header), 36)
+        self.assertFalse(vae.is_h3_vae({"pre_block.attn.zero_k_bias": None}))
+        self.assertIn("video VAE", vae.VIDEO_VAE)
 
     def test_ph3_image_vae_matches_both_published_builds(self):
         from forge_h3.native import vae
-        from forge_h3.native.video_vae import PH3ImageVAE
+        from forge_h3.native.image_vae import PH3ImageVAE
         for name in ("p-h3-image_vae_bf16", "p-h3-image_vae_int8_convrot"):
             with self.subTest(name), torch.device("meta"):
                 header = self.headers[name]
-                self.assertTrue(vae.is_video_vae(header) and vae.is_ph3_vae(header))
-                self.assertEqual(layout_problems(PH3ImageVAE(num_layers=vae.video_layers(header)), header), [])
+                self.assertTrue(vae.is_h3_vae(header) and vae.is_ph3_vae(header))
+                self.assertEqual(layout_problems(PH3ImageVAE(num_layers=vae.decoder_layers(header)), header), [])
         self.assertFalse(vae.is_ph3_vae(self.headers["minimax_h3_video_vae_fp16"]))
 
     def test_text_encoders_are_told_apart(self):
@@ -153,20 +159,6 @@ class CheckpointLayoutTests(unittest.TestCase):
         self.assertEqual(max(int(k.split(".")[3]) for k in te if k.startswith("model.language_model.layers.")) + 1, 36)
         self.assertEqual(te["text_connector.proj.weight"], {"dtype": "F32", "shape": [5120, 5 * 2560]})
 
-    def test_original_minimax_vae_converts_to_the_same_layout(self):
-        from forge_h3.native import vae
-        video = vae.convert_video_vae(meta_state_dict(self.headers["minimax_original_video_vae"]))
-        expected = {k: tuple(v["shape"]) for k, v in self.headers["minimax_h3_video_vae_fp16"].items() if k != "__metadata__"}
-        self.assertEqual({k: tuple(v.shape) for k, v in video.items()}, expected)
-
-    def test_vae_roles_are_recognized(self):
-        from forge_h3.native import vae
-        for name in ("minimax_h3_video_vae_fp16", "minimax_original_video_vae"):
-            self.assertTrue(vae.is_video_vae(self.headers[name]))
-            self.assertFalse(vae.is_audio_vae(self.headers[name]))
-        self.assertTrue(vae.is_audio_vae({"pre_block.attn.zero_k_bias": None}))
-        self.assertEqual(vae.video_layers(self.headers["minimax_h3_video_vae_fp16"]), 36)
-
 
 @unittest.skipIf(torch is None, "needs torch and comfy-kitchen")
 class ConversionTests(unittest.TestCase):
@@ -176,7 +168,7 @@ class ConversionTests(unittest.TestCase):
               "decoder.blocks.0.attn.to_qkv.weight_scale": torch.ones(1)}
         self.assertTrue(vae.is_quantized(sd))
         self.assertFalse(vae.is_quantized({"decoder.blocks.0.attn.to_qkv.weight": torch.ones(1)}))
-        converted = vae.convert_video_vae({"decoder.proj_out.comfy_quant": torch.zeros(1)})
+        converted = vae.with_latent_stats({"decoder.proj_out.comfy_quant": torch.zeros(1)})
         self.assertIn("decoder.proj_out.comfy_quant", converted)
         self.assertEqual(sorted(converted)[-2:], ["latents_mean", "latents_std"])
 
@@ -364,34 +356,8 @@ class ForwardTests(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "needs torch and comfy-kitchen")
 class VaeTests(unittest.TestCase):
-    def tiny_vae(self):
-        from forge_h3.native.video_vae import MiniMaxH3VideoVAE
-        torch.manual_seed(0)
-        model = MiniMaxH3VideoVAE(ch=32, num_layers=1)
-        with torch.no_grad():
-            for p in model.parameters():
-                torch.nn.init.normal_(p, std=0.02)
-        return model.requires_grad_(False)
-
-    def test_a_picture_is_one_latent_frame(self):
-        model = self.tiny_vae()
-        with torch.inference_mode():
-            z = model.encode(torch.rand(1, 3, 1, 64, 96) * 2 - 1)
-            self.assertEqual(tuple(z.shape), (1, 24, 1, 4, 6))
-            self.assertEqual(model.decode_output_shape(z.shape), (1, 3, 1, 64, 96))
-            out = model.decode(z)
-            self.assertEqual(tuple(out.shape), (1, 3, 1, 64, 96))
-            self.assertGreaterEqual(float(out.min()), 0.0)
-            self.assertLessEqual(float(out.max()), 1.0)
-            # ComfyUI's rule for a lone latent: decoded as a chunk of five copies, the first real frame kept
-            raw = model.latents_mean.view(1, -1, 1, 1, 1) + z * model.latents_std.view(1, -1, 1, 1, 1)
-            chunk = model._finalize_pixels(model._decode_pixels(raw.repeat(1, 1, 5, 1, 1)))
-            torch.testing.assert_close(out, chunk[:, :, 3:4])
-            # a picture without the frame axis takes the same path
-            self.assertTrue(torch.equal(model.encode(torch.zeros(1, 3, 64, 96)), model.encode(torch.zeros(1, 3, 1, 64, 96))))
-
     def test_the_ph3_image_vae_samples_its_posterior_and_decodes_one_frame(self):
-        from forge_h3.native.video_vae import PH3_IMAGE_FRAME_POSITION, PH3ImageVAE
+        from forge_h3.native.image_vae import PH3_IMAGE_FRAME_POSITION, PH3ImageVAE
         torch.manual_seed(0)
         model = PH3ImageVAE(ch=32, num_layers=1)
         with torch.no_grad():
@@ -419,9 +385,11 @@ class VaeTests(unittest.TestCase):
                 model.decode(torch.zeros(1, 24, 2, 4, 6))
             with self.assertRaisesRegex(ValueError, "single pictures"):
                 model.encode(torch.zeros(1, 3, 5, 64, 96))
+            # a picture without the frame axis takes the same path
+            self.assertTrue(torch.equal(model.encode(torch.zeros(1, 3, 64, 96)), model.encode(torch.zeros(1, 3, 1, 64, 96))))
 
     def test_the_minimax_h3_image_vae_decodes_one_picture_through_its_2d_decoder(self):
-        from forge_h3.native.video_vae import MiniMaxH3ImageVAE
+        from forge_h3.native.image_vae import MiniMaxH3ImageVAE
         torch.manual_seed(0)
         model = MiniMaxH3ImageVAE(ch=32, num_layers=1)
         with torch.no_grad():
@@ -446,18 +414,10 @@ class VaeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "single-frame"):
                 model.decode(torch.zeros(1, 24, 2, 4, 6))
 
-    def test_video_frame_grid_still_round_trips(self):
-        from forge_h3.native.video_vae import latent_frames, pixel_frames
-        model = self.tiny_vae()
-        with torch.inference_mode():
-            z = model.encode(torch.rand(1, 3, 5, 64, 96) * 2 - 1)
-            self.assertEqual(z.shape[2], latent_frames(5))
-            self.assertEqual(tuple(model.decode(z).shape), (1, 3, pixel_frames(z.shape[2]), 64, 96))
-
     def test_encoder_layers_work_with_offloaded_weights(self):
         # issue #4: when VRAM is short Forge keeps these weights in fp32 system RAM and turns on manual cast; a
         # float64 input stands in for the GPU one (both make plain torch layers fail on the stored weights)
-        from forge_h3.native.video_vae import CausalConv3d, TemporalIsolatedGroupNorm
+        from forge_h3.native.image_vae import CausalConv3d, TemporalIsolatedGroupNorm
         torch.manual_seed(0)
         conv, norm = CausalConv3d(32, 32, kernel_size=3, padding=1), TemporalIsolatedGroupNorm(8, 32)
         reference_conv, reference_norm = CausalConv3d(32, 32, kernel_size=3, padding=1), TemporalIsolatedGroupNorm(8, 32)

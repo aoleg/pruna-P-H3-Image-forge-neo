@@ -31,6 +31,7 @@ H3_IMAGE_DIT = {"video_patch_proj.weight": ("F32", [5376, 96]),
 TE = {"model.language_model.embed_tokens.weight": ("BF16", [151936, 5120]),
       "model.language_model.layers.49.self_attn.q_proj.weight": ("BF16", [5120, 5120]),
       "model.visual.patch_embed.proj.weight": ("BF16", [1280, 3, 2, 14, 14])}
+# the video VAE of MiniMax H3, which the extension refuses
 VAE = {"decoder.x_embedder.proj.weight": ("F16", [1536, 24, 1, 2, 2]),
        "decoder.register_tokens": ("F16", [1, 4, 1536]),
        "encoder.conv_in.weight": ("F16", [128, 3, 3, 3, 3])}
@@ -80,7 +81,7 @@ class HeaderTests(unittest.TestCase):
         te = checkpoint(self.root / "encoder.safetensors", TE)
         with self.assertRaisesRegex(H3Error, "H3 VAE"):
             resolve_components(dit, [te])
-        vae = checkpoint(self.root / "vae.safetensors", VAE)
+        vae = checkpoint(self.root / "vae.safetensors", PH3_VAE)
         with self.assertRaisesRegex(H3Error, "text encoder"):
             resolve_components(dit, [vae])
 
@@ -95,31 +96,41 @@ class HeaderTests(unittest.TestCase):
         audio = checkpoint(self.root / "audio.safetensors", AUDIO_VAE)
         self.assertEqual(inspect_model(audio).role, "audio_vae")
         dit = checkpoint(self.root / "model.safetensors", DIT)
-        modules = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in (("te", TE), ("vae", VAE))]
+        modules = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in (("te", PH3_TE), ("vae", PH3_VAE))]
         with self.assertRaisesRegex(H3Error, "audio VAE: still images do not use it"):
             resolve_components(dit, modules + [audio])
 
     def test_nvfp4_text_encoder_is_rejected(self):
         dit = checkpoint(self.root / "model.safetensors", DIT)
         te = checkpoint(self.root / "encoder.safetensors", TE, {"quantization": "nvfp4_awq"})
-        vae = checkpoint(self.root / "vae.safetensors", VAE)
+        vae = checkpoint(self.root / "vae.safetensors", PH3_VAE)
         with self.assertRaisesRegex(H3Error, "NVFP4"):
             resolve_components(dit, [te, vae])
 
     def test_int8_vae_is_accepted(self):
         dit = checkpoint(self.root / "model.safetensors", DIT)
-        te = checkpoint(self.root / "encoder.safetensors", TE)
-        vae = quantized_checkpoint(self.root / "vae.safetensors", ["int8_tensorwise"], base=VAE,
+        te = checkpoint(self.root / "encoder.safetensors", PH3_TE)
+        vae = quantized_checkpoint(self.root / "vae.safetensors", ["int8_tensorwise"], base=PH3_VAE,
                                    layer="decoder.transformer_blocks.0.attn.to_qkv")
         components = resolve_components(dit, [te, vae])
         self.assertEqual((components.vae.role, components.vae.quantization), ("vae", "int8"))
 
     def test_complete_selection_resolves(self):
-        paths = [checkpoint(self.root / f"{n}.safetensors", t) for n, t in (("te", TE), ("v", VAE))]
+        paths = [checkpoint(self.root / f"{n}.safetensors", t) for n, t in (("te", PH3_TE), ("v", PH3_VAE))]
         components = resolve_components(checkpoint(self.root / "model.safetensors", DIT), paths)
         self.assertEqual([m.role for m in components.models], ["dit", "text_encoder", "vae"])
-        self.assertEqual([m.variant for m in components.models], ["h3", "h3", "h3"])
-        self.assertEqual(components.profile.name, "h3")
+        self.assertEqual([m.variant for m in components.models], ["h3", "ph3-image", "ph3-image"])
+        self.assertEqual(components.profile.name, "ph3")
+
+    def test_the_video_model_set_is_refused(self):
+        # MiniMax H3 as MiniMax ships it (32B text encoder, video VAE) is a video model: no still-image profile
+        dit = checkpoint(self.root / "model.safetensors", DIT)
+        te, video = checkpoint(self.root / "te.safetensors", TE), checkpoint(self.root / "video.safetensors", VAE)
+        self.assertEqual((inspect_model(video).role, inspect_model(video).variant), ("vae", "h3"))
+        with self.assertRaisesRegex(H3Error, "video.safetensors is the H3 video VAE.*p-h3-image_vae.*minimax_h3_image_vae"):
+            resolve_components(dit, [te, video])
+        with self.assertRaisesRegex(H3Error, "audio-video checkpoint makes still images with the P-H3-Image text encoder"):
+            resolve_components(dit, [te, checkpoint(self.root / "v.safetensors", PH3_VAE)])
 
     def test_the_text_encoder_selects_the_p_h3_image_profile_and_its_vae(self):
         dit = checkpoint(self.root / "model.safetensors", DIT)
@@ -129,9 +140,9 @@ class HeaderTests(unittest.TestCase):
         components = resolve_components(dit, [te, vae])
         self.assertEqual((components.profile.name, components.profile.shift, components.profile.steps), ("ph3", 1.0, 8))
         # the two P-H3-Image parts go together: the DiT file cannot tell, the mismatch is refused
-        with self.assertRaisesRegex(H3Error, "needs the P-H3-Image VAE"):
+        with self.assertRaisesRegex(H3Error, "is the H3 video VAE"):
             resolve_components(dit, [te, checkpoint(self.root / "video.safetensors", VAE)])
-        with self.assertRaisesRegex(H3Error, "needs the P-H3-Image text encoder"):
+        with self.assertRaisesRegex(H3Error, "P-H3-Image text encoder .p-h3-image_text_encoder."):
             resolve_components(dit, [checkpoint(self.root / "encoder.safetensors", TE), vae])
 
     def test_minimax_h3_image_is_told_by_its_checkpoint(self):
@@ -142,21 +153,22 @@ class HeaderTests(unittest.TestCase):
         components = resolve_components(dit, [te, vae])
         profile = components.profile
         self.assertEqual((profile.name, profile.steps, profile.cfg, profile.scheduler, profile.max_pictures),
-                         ("h3image", 8, 1.0, "P-H3-Image", 16))
+                         ("h3image", 8, 1.0, "H3-Image 8-step", 16))
         self.assertTrue(components.wants_int8_attention)
-        self.assertFalse(resolve_components(checkpoint(self.root / "model.safetensors", DIT),
-                                            [te, checkpoint(self.root / "video.safetensors", VAE)]).wants_int8_attention)
+        ph3 = [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), checkpoint(self.root / "ph3_vae.safetensors", PH3_VAE)]
+        self.assertFalse(resolve_components(checkpoint(self.root / "model.safetensors", DIT), ph3).wants_int8_attention)
         self.assertEqual(components.experimental, "")
         # experimental: P-H3-Image's 4B text encoder in front of this checkpoint keeps the checkpoint's own recipe
         mixed = resolve_components(dit, [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), vae])
         self.assertEqual((mixed.profile.name, mixed.text_encoder.variant, mixed.experimental),
                          ("h3image", "ph3-image", "P-H3-Image text encoder"))
         # its VAE stays its own, and goes with no other checkpoint
-        for other in (VAE, PH3_VAE):
-            with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image needs its own VAE"):
-                resolve_components(dit, [te, checkpoint(self.root / "other.safetensors", other)])
+        with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image needs its own VAE"):
+            resolve_components(dit, [te, checkpoint(self.root / "other.safetensors", PH3_VAE)])
+        with self.assertRaisesRegex(H3Error, "is the H3 video VAE"):
+            resolve_components(dit, [te, checkpoint(self.root / "video.safetensors", VAE)])
         with self.assertRaisesRegex(H3Error, "goes with the MiniMax-H3-Image checkpoint"):
-            resolve_components(checkpoint(self.root / "model.safetensors", DIT), [te, vae])
+            resolve_components(checkpoint(self.root / "model.safetensors", DIT), [ph3[0], vae])
 
 
 def quantized_checkpoint(path, formats, metadata=None, base=DIT, layer="blocks.{i}.mlp.fc1"):
@@ -224,6 +236,12 @@ GGUF_DIT = dict(DIT, **{"blocks.0.attn.qkv_proj.weight": ("Q4_K", [21504, 5376])
                         "video_patch_proj.weight": ("F32", [5376, 96])})
 
 
+GGUF_H3_IMAGE_DIT = {"video_patch_proj.weight": ("F32", [5376, 96]),
+                     "condition_proj.weight": ("BF16", [5376, 5120]),
+                     "final_layer.video_out.weight": ("F32", [576, 5376]),
+                     "blocks.0.mlp.fc1.weight": ("Q4_K", [28672, 5376])}
+
+
 # unsloth's qwen3vl_32b_minimax_h3-Q2_K_M.gguf in miniature: Hugging Face names, the vision tower inside, no metadata
 GGUF_TE = {"model.embed_tokens.weight": ("BF16", [151936, 5120]),
            "model.layers.49.self_attn.q_proj.weight": ("Q2_K", [8192, 5120]),
@@ -250,7 +268,7 @@ class GGUFTests(unittest.TestCase):
 
     def test_gguf_dit_resolves_with_safetensors_modules(self):
         dit = gguf_checkpoint(self.root / "model.gguf", GGUF_DIT)
-        paths = [checkpoint(self.root / f"{n}.safetensors", t) for n, t in (("te", TE), ("v", VAE))]
+        paths = [checkpoint(self.root / f"{n}.safetensors", t) for n, t in (("te", PH3_TE), ("v", PH3_VAE))]
         self.assertEqual(resolve_components(dit, paths).dit.quantization, "gguf Q4_K")
 
     def test_gguf_types_forge_cannot_dequantize_are_refused(self):
@@ -269,11 +287,13 @@ class GGUFTests(unittest.TestCase):
         self.assertEqual((item.role, item.quantization), ("text_encoder", "gguf Q2_K"))
 
     def test_all_gguf_set_resolves(self):
-        dit = gguf_checkpoint(self.root / "model.gguf", GGUF_DIT)
+        # the 32B text encoder goes with MiniMax-H3-Image
+        dit = gguf_checkpoint(self.root / "model.gguf", GGUF_H3_IMAGE_DIT)
         te = gguf_checkpoint(self.root / "te.gguf", GGUF_TE)
-        paths = [te, checkpoint(self.root / "v.safetensors", VAE)]
+        paths = [te, checkpoint(self.root / "v.safetensors", H3_IMAGE_VAE)]
         components = resolve_components(dit, paths)
         self.assertEqual((components.dit.quantization, components.text_encoder.quantization), ("gguf Q4_K", "gguf Q2_K"))
+        self.assertEqual(components.profile.name, "h3image")
 
     def test_gguf_vae_is_refused(self):
         with self.assertRaisesRegex(H3Error, "diffusion model and text encoder only"):

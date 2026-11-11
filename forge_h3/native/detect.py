@@ -7,11 +7,12 @@ read through shape_of, so no tensor has to be materialized.
 import json
 import re
 
+# the sigma grid of MiniMax-H3-Image's six output heads, for a file that carries no metadata
+from ..profiles import H3_IMAGE_PDD_SIGMAS
+
 # the image checkpoints (MiniMax-H3-Image) have no audio stream
 IDENTITY_KEYS = ("video_patch_proj.weight", "condition_proj.weight", "final_layer.video_out.weight")
 AUDIO_KEY = "audio_patch_proj.weight"
-# the sigma grid of MiniMax-H3-Image's six output heads (pdd_config.json), when a file carries no metadata
-H3_IMAGE_PDD_SIGMAS = (1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0)
 
 
 def shape_of(value):

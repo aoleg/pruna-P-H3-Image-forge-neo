@@ -22,10 +22,10 @@ from transformers.modeling_utils import no_init_weights
 
 from . import filebacked, gguf_vision, model, release, vae
 from .engine import MiniMaxH3Engine
+from .image_vae import H3ImageVAE, MiniMaxH3ImageVAE, PH3ImageVAE
 from .islands import floating_dtype, fp32_islands, restore_fp32
 from .text_encoder import PH3ImageQwen3VL, Qwen3VL32B
 from .transformer import MiniMaxH3Model
-from .video_vae import MiniMaxH3ImageVAE, MiniMaxH3VideoVAE, PH3ImageVAE
 
 logger = logging.getLogger("forge_h3")
 
@@ -140,8 +140,8 @@ def _hook_replace_state_dict() -> None:
             return original(sd, asd, guess, path)
         if _is_h3_text_encoder(asd):
             _replace(sd, f"{guess.text_encoder_key_prefix[0]}{TE_PREFIX}", asd)
-        elif vae.is_video_vae(asd):
-            _replace(sd, guess.vae_key_prefix[0], vae.convert_video_vae(asd))
+        elif vae.is_h3_vae(asd):
+            _replace(sd, guess.vae_key_prefix[0], vae.with_latent_stats(asd))
         else:
             return original(sd, asd, guess, path)
         return sd
@@ -149,26 +149,24 @@ def _hook_replace_state_dict() -> None:
     loader.replace_state_dict = replace_state_dict
 
 
-def _load_vae(state_dict: dict) -> MiniMaxH3VideoVAE:
-    if not isinstance(state_dict, dict) or not vae.is_video_vae(state_dict):
+def _load_vae(state_dict: dict) -> H3ImageVAE:
+    if not isinstance(state_dict, dict) or not vae.is_h3_vae(state_dict):
         raise ValueError(vae.MISSING_VAE)
-    layers = vae.video_layers(state_dict)
-    # the image VAEs decode one frame per latent (MiniMax-H3-Image's with a 2D decoder, P-H3-Image's at a fixed
-    # time coordinate); the video VAE is Comfy-Org's, Kijai's or MiniMax's own
-    if vae.is_h3_image_vae(state_dict):
-        cls = MiniMaxH3ImageVAE
-    else:
-        cls = PH3ImageVAE if vae.is_ph3_vae(state_dict) else MiniMaxH3VideoVAE
+    if not vae.is_image_vae(state_dict):
+        raise ValueError(vae.VIDEO_VAE)
+    layers = vae.decoder_layers(state_dict)
+    # one frame per latent: MiniMax-H3-Image's with a 2D decoder, P-H3-Image's at a fixed time coordinate
+    cls = MiniMaxH3ImageVAE if vae.is_h3_image_vae(state_dict) else PH3ImageVAE
     with no_init_weights():
         if vae.is_quantized(state_dict):
-            # an int8 VAE (Kijai's, Pruna's): Forge's mixed-precision operations read each layer's comfy_quant
+            # an int8 VAE (Pruna's): Forge's mixed-precision operations read each layer's comfy_quant
             with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, manual_cast_enabled=True,
                                         extra_dtype={"mixed_ops": True, "TE": False}):
                 autoencoder = cls(num_layers=layers)
         else:
             with using_forge_operations(device=memory_management.cpu, dtype=torch.float32, extra_dtype="vae"):
                 autoencoder = cls(num_layers=layers)
-    # read by Forge's VAE patcher: z_dim for the 3D (video) path
+    # read by Forge's VAE patcher: z_dim for the 3D path (the latent keeps a frame axis of 1)
     autoencoder.config = SimpleNamespace(z_dim=24)
     load_state_dict(autoencoder, state_dict, log_name="MiniMax H3 VAE")
     return autoencoder
@@ -326,7 +324,7 @@ def apply() -> None:
     try:
         _hook_metadata()
     except Exception as e:
-        # MiniMax-H3-Image then samples on its published sigma grid (detect.H3_IMAGE_PDD_SIGMAS)
+        # MiniMax-H3-Image then samples on its published sigma grid (profiles.H3_IMAGE_PDD_SIGMAS)
         logger.warning(f"[MiniMax H3] could not read checkpoint metadata through the loader: {e}")
     if model.MiniMaxH3 not in model_list.models:
         model_list.models.append(model.MiniMaxH3)
@@ -347,15 +345,15 @@ def apply() -> None:
 
         presets.register_scheduler()
     except Exception as e:
-        # P-H3-Image still runs on Forge's own schedules (Simple at shift 1 is the closest)
-        logger.warning(f"[MiniMax H3] could not add the P-H3-Image schedule: {e}")
+        # the models still run on Forge's own schedules, none of which ends where theirs do
+        logger.warning(f"[MiniMax H3] could not add the P-H3-Image and H3-Image schedules: {e}")
     try:
         from . import presets
 
         presets.register()
     except Exception as e:
         # the model still works without the presets: the panel applies each profile's sampler, schedule and CFG
-        logger.warning(f"[MiniMax H3] could not add the h3, ph3 and h3image UI presets: {e}")
+        logger.warning(f"[MiniMax H3] could not add the ph3 and h3image UI presets: {e}")
 
     _applied = True
     print(f"[MiniMax H3] native backend enabled (torch {torch.__version__}, {os.path.basename(model.CONFIG_DIR)})")

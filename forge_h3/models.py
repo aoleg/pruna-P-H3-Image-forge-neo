@@ -142,8 +142,9 @@ def read_header(path):
     return reader(str(path), stat.st_size, stat.st_mtime_ns)
 
 
-# the text encoder and the VAE of P-H3-Image, or of MiniMax H3 itself: the audio-video DiT files share one layout.
-# MiniMax-H3-Image is a checkpoint of its own (no audio stream), with the H3 text encoder and a 2D image VAE
+# the variants of a file: P-H3-Image's own text encoder and VAE; MiniMax-H3-Image's checkpoint (no audio stream) and
+# 2D image VAE; "h3" for what MiniMax H3 itself ships: the audio-video DiT layout (P-H3-Image's checkpoint has it
+# too), the 32B text encoder (MiniMax-H3-Image uses it) and the video VAE, which is recognized only to be refused
 PH3_IMAGE = "ph3-image"
 H3_IMAGE = "h3-image"
 H3 = "h3"
@@ -296,8 +297,8 @@ class Components:
 
     @property
     def profile(self):
-        """The recipe of the selected model: MiniMax-H3-Image is told by its checkpoint; the audio-video checkpoints
-        share one layout, so the text encoder tells P-H3-Image from H3."""
+        """The recipe of the selected model: MiniMax-H3-Image is told by its checkpoint, P-H3-Image by its text
+        encoder in front of an audio-video checkpoint."""
         from .profiles import for_components
         return for_components(self.dit.variant, self.text_encoder.variant)
 
@@ -329,6 +330,10 @@ def resolve_components(dit_path, module_paths):
             raise H3Error(f"Unrecognized H3 component: {Path(path).name}. Select only the H3 text encoder and VAE.")
         if item.role == "audio_vae":
             raise H3Error(f"{Path(path).name} is the H3 audio VAE: still images do not use it. Deselect it.")
+        if item.role == "vae" and item.variant == H3:
+            raise H3Error(f"{Path(path).name} is the H3 video VAE, which makes four frames per latent: still images "
+                          "use the P-H3-Image VAE (p-h3-image_vae) or the MiniMax-H3-Image VAE "
+                          "(minimax_h3_image_vae). Select one of them in its place.")
         if item.role in resolved:
             raise H3Error(f"More than one H3 {ROLE_LABELS[item.role]} is selected.")
         resolved[item.role] = item
@@ -349,10 +354,11 @@ def resolve_components(dit_path, module_paths):
     if components.vae.variant == H3_IMAGE:
         raise H3Error("The MiniMax-H3-Image VAE goes with the MiniMax-H3-Image checkpoint (minimax_h3_image): select "
                       "that checkpoint, or the VAE of the selected model.")
-    if components.vae.variant != components.profile.vae:
-        if components.profile.vae == PH3_IMAGE:
-            raise H3Error("The P-H3-Image text encoder needs the P-H3-Image VAE (p-h3-image_vae), whose decoder makes "
-                          "one frame per latent: select it in place of the H3 video VAE.")
-        raise H3Error("The P-H3-Image VAE needs the P-H3-Image text encoder (p-h3-image_text_encoder): select it in "
-                      "place of the H3 text encoder, or select the H3 video VAE.")
+    if components.text_encoder.variant != PH3_IMAGE:
+        # MiniMax H3 with its own 32B text encoder is the video model; as a still-image model the audio-video
+        # checkpoints run behind P-H3-Image's text encoder (Pruna's checkpoint, or MiniMax H3 with Pruna's LoRA)
+        raise H3Error("An H3 audio-video checkpoint makes still images with the P-H3-Image text encoder "
+                      "(p-h3-image_text_encoder) and VAE (p-h3-image_vae): select them in place of the H3 text "
+                      "encoder. For MiniMax's own image model, select the MiniMax-H3-Image checkpoint "
+                      "(minimax_h3_image).")
     return components

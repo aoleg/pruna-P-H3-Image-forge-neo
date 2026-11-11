@@ -1,8 +1,9 @@
-"""MiniMax H3 video VAE: 3D causal CNN encoder + ViT3D decoder.
+"""The H3 image VAEs: the 3D causal CNN encoder of MiniMax H3 with a single-frame ViT decoder.
 
-Ported from ComfyUI comfy/ldm/minimax/vae.py (see native.COMFYUI_COMMIT) for the Comfy-Org single-file layout.
-ComfyUI's fused kitchen paths (NDHWC pad, fp16-accumulate conv, INT8 activation folding, INT8 attention) are left
-out; the math is the same. Frames 17k+5 <-> latents 5k+2, 16x spatial.
+Ported from ComfyUI comfy/ldm/minimax/vae.py (see native.COMFYUI_COMMIT): H3ImageVAE and its two subclasses, one for
+P-H3-Image and one for MiniMax-H3-Image. ComfyUI's fused kitchen paths (NDHWC pad, fp16-accumulate conv, INT8
+activation folding, INT8 attention) are left out; the math is the same. One picture is one latent frame, 16x spatial.
+The video decoder of MiniMax H3 (clips of 17 frames, temporal chunking) is not here: the extension makes stills only.
 """
 
 import math
@@ -33,15 +34,6 @@ LATENTS_STD = [
     2.961095094680786, 2.7694199085235595, 3.0496184825897215, 2.1088054180145265,
     3.276226282119751, 3.1627357006073, 2.28168129920959475, 2.6127843856811525,
 ]
-
-# latent frames <-> pixel frames
-def latent_frames(frames):
-    return max(1, (frames - 5) // 17 * 5 + 2) if frames > 1 else 1
-
-
-def pixel_frames(latents):
-    return max(1, (latents - 2) // 5 * 17 + 5)
-
 
 def _rms_norm(x, weight, eps):
     return F.rms_norm(x, (x.shape[-1],), weight=weight, eps=eps)
@@ -318,13 +310,36 @@ class ViT3DDecoder(nn.Module):
         return output.reshape(B, self.out_channels, latent_T * self.patch_size_t, latent_H * self.patch_size, latent_W * self.patch_size)
 
 
-# Full VAE
+# The image VAEs (ComfyUI H3ImageVAE and its two subclasses)
 
-class MiniMaxH3VideoVAE(nn.Module):
+# P-H3-Image: rope time coordinate of the decoded frame
+PH3_IMAGE_FRAME_POSITION = 2.0 * (0.5 / 7) - 1.0
+# the image VAEs condition on a posterior sample; the H3 keyframe recipe's seed
+IMAGE_ENCODE_SEED = 42
+# the decoders' output projection: 3 channels x one frame x 16 x 16
+IMAGE_PROJ_OUT = 3 * 16 * 16
+# MiniMax-H3-Image's decoder is 16 heads of 64 wide, P-H3-Image's 32
+H3_IMAGE_DECODER_DIM = 16 * 64
+
+
+class PH3ImageDecoder(ViT3DDecoder):
+    """One frame per latent, at a fixed rope time coordinate."""
+
+    def __init__(self, **kwargs):
+        super().__init__(patch_size_t=1, **kwargs)
+        del self.mask_token
+
+    def _token_ids(self, latent_T, latent_H, latent_W, device, dtype):
+        ids = create_token_ids((latent_H, latent_W), device, dtype)
+        return torch.cat([torch.full_like(ids[..., :1], PH3_IMAGE_FRAME_POSITION), ids], dim=-1)
+
+
+class H3ImageVAE(nn.Module):
+    """The H3 encoder with a single-frame decoder; subclasses attach the decoder."""
+
     def __init__(
         self,
         in_channels=3,
-        out_ch=3,
         ch=128,
         embed_dim=24,
         z_channels=24,
@@ -332,25 +347,12 @@ class MiniMaxH3VideoVAE(nn.Module):
         num_res_blocks=2,
         space_down=(2, 2, 2, 2, 1, 1),
         time_down=(1, 2, 2, 1, 1, 1),
-        clip_length=17,
-        token_drop=3,
         tile_size=256,
         tile_overlap_min=64,
         tiling=True,
-        num_layers=36,
-        decoder=True,
     ):
         super().__init__()
         self.vae_ratio = int(math.prod(space_down))
-        self.vae_ratio_t = int(math.prod(time_down))
-
-        # temporal chunking parameters
-        self.clip_length = clip_length
-        self.token_drop = token_drop
-        self.frame_pre_padding = (-clip_length) % self.vae_ratio_t
-        self.tokens_chunk_size = math.ceil(clip_length / self.vae_ratio_t)
-        self.token_overlap = (-token_drop) % self.tokens_chunk_size
-        self.frame_overlap = max(self.token_overlap * self.vae_ratio_t - self.frame_pre_padding, 0)
 
         # spatial tiling parameters
         self.tiling = tiling
@@ -369,14 +371,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         )
         self.quant_conv = nn.Conv3d(z_channels * 2, 2 * embed_dim, 1)
         self.post_quant_conv = nn.Conv3d(embed_dim, z_channels, 1)
-        # the image VAEs attach a decoder of their own
-        self.decoder = ViT3DDecoder(
-            patch_size=self.vae_ratio,
-            patch_size_t=self.vae_ratio_t,
-            in_channels=z_channels,
-            out_channels=out_ch,
-            num_layers=num_layers,
-        ) if decoder else None
+        self.decoder = None
 
         self.register_buffer("latents_mean", torch.tensor(LATENTS_MEAN))
         self.register_buffer("latents_std", torch.tensor(LATENTS_STD))
@@ -398,15 +393,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         # raw decoder output -> float32 pixels in [0, 1] (the VAE wrapper's process_output is identity)
         part = part * self.pixel_std.to(device=part.device, dtype=torch.float32)
         return part.add_(self.pixel_mean.to(device=part.device, dtype=torch.float32)).clamp_(0.0, 1.0)
-
-    def decode_output_shape(self, input_shape):
-        b, _, t, h, w = input_shape
-        if t == 1:
-            frames = 1
-        else:
-            pad_tokens, num_chunks = self._decode_temporal_chunks(t)
-            frames = self._decode_temporal_frame_plan(t + pad_tokens, num_chunks, pad_tokens)
-        return (b, self.decoder.out_channels, frames, h * self.vae_ratio, w * self.vae_ratio)
 
     def _adaptive_encode(self, x):
         if self.tiling:
@@ -551,209 +537,6 @@ class MiniMaxH3VideoVAE(nn.Module):
             out_y += tile_height
         return canvas
 
-    # temporal chunking
-
-    def encode_temporal(self, x, device):
-        # chunked input io: x may live on the CPU, clips move to the device as they encode
-        z_list = []
-        for i in range(math.ceil(x.shape[2] / self.clip_length)):
-            clip_x = x[:, :, i * self.clip_length:(i + 1) * self.clip_length, :, :].to(device)
-            if clip_x.shape[2] < self.clip_length:
-                pad_frames = clip_x[:, :, -1:].repeat(1, 1, self.clip_length - clip_x.shape[2], 1, 1)
-                clip_x = torch.cat([clip_x, pad_frames], dim=2)
-            z_list.append(self._adaptive_encode(self._normalize_pixels(clip_x)))
-
-        z = torch.cat(z_list, dim=2)
-        if self.token_drop > 0:
-            z = z[:, :, :-self.token_drop]
-        return z
-
-    def _decode_temporal_pad_frames(self, z_len, pad_tokens):
-        if pad_tokens <= 0:
-            return 0
-        intra_tail = self.clip_length % self.vae_ratio_t
-        if intra_tail == 0:
-            return pad_tokens * self.vae_ratio_t
-
-        z_len_before_pad = z_len - pad_tokens
-        return sum(
-            (intra_tail if (z_len_before_pad + k) % self.tokens_chunk_size == 0
-             else self.vae_ratio_t)
-            for k in range(pad_tokens)
-        )
-
-    def _decode_temporal_frame_plan(self, z_len, num_chunks, pad_tokens):
-        chunk_dec = self.tokens_chunk_size * self.vae_ratio_t
-        split_count = int(self.token_drop > 0) + 1
-        total_frames = 0
-        final_overlap_frames = 0
-
-        for i in range(num_chunks):
-            t_start_idx = i * self.tokens_chunk_size
-            t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap
-            clip_token_len = max(0, min(t_end_idx, z_len) - min(t_start_idx, z_len))
-            clip_frame_len = clip_token_len * self.vae_ratio_t
-
-            for j in range(split_count):
-                f_start_idx = j * chunk_dec
-                f_end_idx = min(f_start_idx + chunk_dec, clip_frame_len)
-                chunk_frames = max(0, f_end_idx - f_start_idx - self.frame_pre_padding)
-                if j == 0:
-                    total_frames += chunk_frames
-                else:
-                    final_overlap_frames = chunk_frames
-
-        total_frames += final_overlap_frames
-        return total_frames - self._decode_temporal_pad_frames(z_len, pad_tokens)
-
-    def _decode_temporal_chunks(self, z_len):
-        pseudo_total_tokens = z_len + self.token_drop
-        pad_tokens = (-pseudo_total_tokens) % self.tokens_chunk_size
-        pseudo_total_tokens += pad_tokens
-
-        num_chunks = pseudo_total_tokens // self.tokens_chunk_size - int(self.token_drop > 0)
-        if num_chunks < 1:
-            # too few tokens for one chunk (e.g. T_lat == 2): pad one extra chunk
-            pad_tokens += self.tokens_chunk_size
-            num_chunks += 1
-        return pad_tokens, num_chunks
-
-    def decode_temporal(self, z, output_buffer=None):
-        chunk_dec = self.tokens_chunk_size * self.vae_ratio_t
-        split_count = int(self.token_drop > 0) + 1
-
-        if output_buffer is None:
-            # finalized chunks stream out of VRAM so the full video never sits on the GPU
-            output_buffer = torch.empty(self.decode_output_shape(z.shape), dtype=torch.float32,
-                                        device="cpu")
-
-        pad_tokens, num_chunks = self._decode_temporal_chunks(z.shape[2])
-        if pad_tokens > 0:
-            pad_z = z[:, :, -1:, :, :].repeat(1, 1, pad_tokens, 1, 1)
-            z = torch.cat([z, pad_z], dim=2)
-
-        dec = output_buffer
-        dec_overlap = None
-        write_pos = 0
-
-        def write_part(part):
-            nonlocal write_pos
-            part_frames = part.shape[2]
-            if part_frames <= 0:
-                return
-            part = self._finalize_pixels(part)
-            copy_frames = min(part_frames, max(0, dec.shape[2] - write_pos))
-            if copy_frames > 0:
-                dec[:, :, write_pos:write_pos + copy_frames, :, :].copy_(
-                    part[:, :, :copy_frames, :, :]
-                )
-                write_pos += copy_frames
-
-        for i in range(num_chunks):
-            t_start_idx = i * self.tokens_chunk_size
-            t_end_idx = t_start_idx + self.tokens_chunk_size + self.token_overlap
-            clip_z = z[:, :, t_start_idx:t_end_idx, :, :]
-
-            clip_dec = self._adaptive_decode(clip_z)
-
-            for j in range(split_count):
-                f_start_idx = j * chunk_dec
-                f_end_idx = min(f_start_idx + chunk_dec, clip_dec.shape[2])
-                clip_dec_chunk = clip_dec[:, :, f_start_idx:f_end_idx, :, :]
-                clip_dec_chunk = clip_dec_chunk[:, :, self.frame_pre_padding:, :, :]
-
-                if j == 0:
-                    if dec_overlap is not None:
-                        clip_dec_chunk = self.blend(
-                            dec_overlap, clip_dec_chunk, self.frame_overlap, dim=-3
-                        )
-                        dec_overlap = None
-                    write_part(clip_dec_chunk)
-                else:
-                    dec_overlap = clip_dec_chunk.contiguous()
-
-            if i == num_chunks - 1 and dec_overlap is not None:
-                write_part(dec_overlap)
-                dec_overlap = None
-
-            del clip_dec, clip_z, clip_dec_chunk
-
-        return dec
-
-    def encode(self, x, device=None):
-        # x: [B, 3, T, H, W] in [-1, 1] -> normalized latents [B, 24, T_lat, H/16, W/16]
-        if x.ndim == 4:
-            x = x.unsqueeze(2)
-        if device is None:
-            device = x.device
-
-        if x.shape[2] == 1:
-            moments = self._adaptive_encode(self._normalize_pixels(x.to(device)))
-            moments = moments[:, :, -1:, :, :]
-        else:
-            moments = self.encode_temporal(x, device)
-
-        mean = torch.chunk(moments.float(), 2, dim=1)[0]
-
-        latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(mean)
-        latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(mean)
-        return (mean - latents_mean) / latents_std
-
-    def encode_tiled(self, x, **kwargs):
-        # tiling is always on internally with the reference's semantic tile sizes, ignore tiling fallbacks
-        return self.encode(x)
-
-    def decode_tiled(self, z, **kwargs):
-        return self.decode(z)
-
-    def decode(self, z, output_buffer=None):
-        # z: [B, 24, T_lat, H_lat, W_lat] normalized latents -> float32 pixels [B, 3, T, H, W] in [0, 1]
-        latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(z)
-        latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(z)
-        z = z * latents_std + latents_mean
-
-        if z.shape[2] == 1:
-            # a still latent is the first latent of a clip and decodes badly alone: decode it as a full chunk of
-            # copies and keep only its first real frame (ComfyUI's current rule)
-            first = slice(self.frame_pre_padding, self.frame_pre_padding + 1)
-            dec = self._finalize_pixels(self._adaptive_decode(z.repeat(1, 1, self.tokens_chunk_size, 1, 1))[:, :, first])
-            if output_buffer is None:
-                return dec
-            output_buffer.copy_(dec)
-            return output_buffer
-        return self.decode_temporal(z, output_buffer)
-
-
-# The image VAEs: the H3 encoder with a single-frame decoder (ComfyUI H3ImageVAE and its two subclasses)
-
-# P-H3-Image: rope time coordinate of the decoded frame
-PH3_IMAGE_FRAME_POSITION = 2.0 * (0.5 / 7) - 1.0
-# the image VAEs condition on a posterior sample; the H3 keyframe recipe's seed
-IMAGE_ENCODE_SEED = 42
-# the decoders' output projection: 3 channels x one frame x 16 x 16, where the video decoder makes four frames
-IMAGE_PROJ_OUT = 3 * 16 * 16
-# MiniMax-H3-Image's decoder is 16 heads of 64 wide, P-H3-Image's 32
-H3_IMAGE_DECODER_DIM = 16 * 64
-
-
-class PH3ImageDecoder(ViT3DDecoder):
-    """One frame per latent, at a fixed rope time coordinate."""
-
-    def __init__(self, **kwargs):
-        super().__init__(patch_size_t=1, **kwargs)
-        del self.mask_token
-
-    def _token_ids(self, latent_T, latent_H, latent_W, device, dtype):
-        ids = create_token_ids((latent_H, latent_W), device, dtype)
-        return torch.cat([torch.full_like(ids[..., :1], PH3_IMAGE_FRAME_POSITION), ids], dim=-1)
-
-
-class H3ImageVAE(MiniMaxH3VideoVAE):
-    """The H3 encoder with a single-frame decoder; subclasses attach the decoder."""
-
-    def __init__(self, **kwargs):
-        super().__init__(decoder=False, **kwargs)
-
     def encode(self, x, device=None):
         # x: [B, 3, 1, H, W] in [-1, 1] -> a normalized posterior sample [B, 24, 1, H/16, W/16]; every picture draws
         # the same noise, so an edit is repeatable
@@ -772,7 +555,7 @@ class H3ImageVAE(MiniMaxH3VideoVAE):
         return (latents - latents_mean) / latents_std
 
     def decode(self, z, output_buffer=None):
-        # one latent is one frame here: no chunk of copies
+        # z: [B, 24, 1, H_lat, W_lat] normalized latents -> float32 pixels [B, 3, 1, H, W] in [0, 1]
         if z.shape[2] != 1:
             raise ValueError(f"This image VAE decodes single-frame image latents only, got {z.shape[2]} latent frames")
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(z)
@@ -804,5 +587,5 @@ class MiniMaxH3ImageVAE(H3ImageVAE):
                                     heads=16, rope_dim_ratio=0.5, rope_dims=2)
 
     def _decode_pixels(self, z):
-        # the 2D post-quant conv takes the single frame; the decoder keeps the video layout with T = 1
+        # the 2D post-quant conv takes the single frame; the decoder keeps the [B, C, T, H, W] layout with T = 1
         return self.decoder(self.post_quant_conv(z.squeeze(2)).unsqueeze(2))

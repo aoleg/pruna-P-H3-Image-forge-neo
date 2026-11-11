@@ -1,27 +1,26 @@
-# MiniMax-H3-Image, P-H3-Image and H3 stills for Forge Neo
+# MiniMax-H3-Image and P-H3-Image for Forge Neo
 
 [![Forge Neo](https://img.shields.io/badge/Forge-Neo-blue)](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo)
 ![Status](https://img.shields.io/badge/Status-P--H3--Image_tested-brightgreen)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
 
-An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) that runs the MiniMax H3 architecture as a **still-image model**: MiniMax's own [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) and Pruna's [P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy) for text-to-image and editing, and H3 fine-tunes such as lodestones' [chroma-h3](https://huggingface.co/lodestones/chroma-h3) through their LoRAs, with the checkpoint selector, presets and Generate button you already know.
+An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) that runs the MiniMax H3 architecture as a **still-image model**: MiniMax's own [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) and Pruna's [P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy) for text-to-image and editing, with the checkpoint selector, presets and Generate button you already know.
 
 > [!Note]
 > **A personal note and recommendation, after testing P-H3-Image generation and editing on an RTX 5090.** P-H3-Image is much better as an **edit-and-upscale** model than as a text-to-image model. It is a very good image restoration and upscaling model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds. Text-to-image is rather meh, because small details come out soft. Give it a picture to work from.
 >
-> **MiniMax-H3-Image** (0.9.x) runs; see [Settings](#settings) for the recipe I use instead of MiniMax's own. **Still untested:** its edit mode and 16 MP, chroma-h3, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+> **MiniMax-H3-Image** runs; see [Settings](#settings) for the schedules I use instead of MiniMax's own. **Still untested:** its edit mode and 16 MP, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
 >
 > This is a fork of [minimax-h3-forge-neo](https://github.com/eduardoabreu81/minimax-h3-forge-neo) with everything video and audio removed: no clips, no sound, no FFmpeg, no keyframes, guides or motion control. The extension needs an up-to-date **Forge Neo** (the `neo` branch, with comfy-kitchen 0.2.37 or later). On an older version it stays disabled and tells you so in the console; Forge Neo itself keeps working as usual.
 
 ## What it does
 
-- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 6 to 8 steps with no CFG. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
+- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 5 to 8 steps with no CFG, on schedules made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
 - **P-H3-Image text-to-image** at 8 MP in 8 steps, no CFG, with Pruna's own schedule: select the P-H3-Image checkpoint, text encoder and VAE, pick the `ph3` UI preset and generate.
 - **P-H3-Image edits** in img2img: the input image is `<Picture 1>`, the ImageStitch Integrated gallery holds up to 7 references, and the prompt names them.
-- **H3 fine-tunes as still models**: an H3 checkpoint with its 32B text encoder and video VAE, plus the fine-tune's LoRA through Forge's `<lora:name:1>` syntax. chroma-h3's recipe is the `h3` preset.
 - **Forge's own machinery**: its loader, samplers, memory management, quantized formats (int8, w4a8, w6a8, fp8, GGUF) and LoRA handling. Nothing is installed into Forge's Python environment.
 
-A generation is one video latent frame, decoded as a picture. The audio-video checkpoints (P-H3-Image, H3) also get the two-step audio stub they expect, sampled with the picture and never decoded; MiniMax-H3-Image has no audio stream at all. No audio VAE is needed.
+A generation is one latent frame, decoded as a picture. P-H3-Image's checkpoint has the audio-video layout of MiniMax H3, so it also gets the two-step audio stub it expects, sampled with the picture and never decoded; MiniMax-H3-Image has no audio stream at all. The video VAE and the audio VAE of MiniMax H3 are not used, and are refused if selected.
 
 ## Installation
 
@@ -66,30 +65,44 @@ If you already have a MiniMax H3 FL2VA checkpoint, the 2 GB `loras/p-h3-image_lo
 
 The **prompt upsampler** of Pruna's workflows (a Qwen3.5-9B text generator) is not part of this extension. P-H3-Image is sensitive to prompting: write full, specific prompts, or run the upsampler elsewhere and paste its output.
 
-### chroma-h3 and other H3 fine-tunes
+### MiniMax H3 itself
 
-| Part | File | Folder |
-| --- | --- | --- |
-| H3 checkpoint | any FL2VA checkpoint, for example [minimax_h3_fl2va_pruned_int8_convrot](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/diffusion_models) (19.5 GiB) | `models/Stable-diffusion` |
-| Text encoder | [qwen3vl_32b_minimax_h3_int8_convrot](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/text_encoders) (25.3 GiB), Merserk's INT4 or unsloth's GGUF | `models/text_encoder` |
-| Video VAE | [minimax_h3_video_vae_fp16](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae) (4.9 GiB) or Kijai's int8 | `models/VAE` |
-| chroma-h3 fine-tune | [chroma-h3-comfyui.safetensors](https://huggingface.co/lodestones/chroma-h3/tree/main/lora) (2.9 GB) | `models/Lora` |
-| chroma-h3 few-step | [chroma-h3_vspace_dmd8-comfyui.safetensors](https://huggingface.co/lodestones/chroma-h3/tree/main/lora) (6.6 GB) | `models/Lora` |
-
-Use the `-comfyui` LoRA files; the diffusers-format ones in the same folder do not load in Forge. The audio VAE of the video model is not needed and is refused if selected.
+Up to 0.9.x an `h3` preset ran a MiniMax H3 video checkpoint with its own 32B text encoder and video VAE as a still-image model, for fine-tune LoRAs such as chroma-h3. It was never tested on a GPU, and MiniMax-H3-Image makes it redundant, so 0.10.0 removes it together with the video VAE. An H3 audio-video checkpoint still runs behind the P-H3-Image text encoder and VAE, as described above; with the 32B text encoder it is refused with a message that says what to select.
 
 ## Settings
 
-Selecting an H3 checkpoint applies the matching profile's sampler, schedule and CFG, and the UI presets carry the rest:
+Selecting a checkpoint applies the matching profile's sampler, schedule and CFG, and the UI presets carry the rest:
 
-| | `h3image` preset: MiniMax-H3-Image | `ph3` preset: P-H3-Image | `h3` preset: H3 fine-tunes |
-| --- | --- | --- | --- |
-| Sampler, schedule | Euler, **P-H3-Image** (MiniMax's reference: Euler, Simple) | Euler, **P-H3-Image** (Pruna's 8-step grid) | Euler, Simple |
-| Steps, CFG | 8, 1 (reference: 6, 1) | 8, 1 | 30, 3 (the DMD LoRA: 8, 1) |
-| Shift | not used (slider hidden) | 1 | 3 |
-| Size | 4 to 20 MP, best about 16 MP | about 8 MP: 2912×2912, 3360×2496, 3872×2176 | about 1 MP |
+| | `h3image` preset: MiniMax-H3-Image | `ph3` preset: P-H3-Image |
+| --- | --- | --- |
+| Sampler, schedule | Euler, **H3-Image 8-step** | Euler, **P-H3-Image** (Pruna's 8-step grid) |
+| Steps, CFG | 8, 1 | 8, 1 |
+| Shift | not used (slider hidden) | 1 |
+| Size | 4 to 20 MP, best about 16 MP | about 8 MP: 2912×2912, 3360×2496, 3872×2176 |
 
-MiniMax-H3-Image has two recipes. **The default** is Euler with the P-H3-Image schedule at 8 steps (Heun also works there and was a little better in small details, at twice the time). It is a personal pick from same-seed tests at 8.7 MP: Pruna's grid stays above sigma 0.53 and takes its last step from there, and the pictures came out clean. **MiniMax's reference** is Euler, Simple, 6 steps: every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for. In the same tests its two low-noise steps left speckle and crunchy texture, and Heun on it failed outright. The port matches MiniMax's pipeline piece by piece there, so whether that texture is the model's intent (the test prompt asked for a 1970s photograph) or a weakness of the quantized checkpoint is still open; try both recipes on your own prompts. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
+### The H3-Image schedules
+
+MiniMax-H3-Image has three schedules of its own, each named for the step count it was tuned at:
+
+| Schedule | Steps | What it is | Result |
+| --- | ---: | --- | --- |
+| **H3-Image 8-step** | 8 | a shifted flow curve from sigma 1 to 0.42, then 0 | the default, and the crispest |
+| **H3-Image 6-step** | 6 | MiniMax's own six-point grid with its last point lifted from 0.232 to 0.42 | clean, three quarters of the time |
+| **H3-Image 5-step** | 5 | MiniMax's grid without its last point (it ends at 0.53) | the fastest, with a little more grain |
+
+Each runs at any other step count too: the list is resampled between its two fixed ends, so 10 or 12 steps of the 8-step schedule sample the same curve more finely and never go below its last sigma. More steps are different, not better: 12 steps gave more skin texture and blemishes than 8. The step count also changes the composition, because the first sigmas choose it.
+
+These schedules are a personal pick from same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP, the INT8 checkpoint with P-H3-Image's text encoder). What decides the picture is the lowest sigma the model is evaluated at:
+
+| Last sigma before 0 | Schedules that end there | Picture |
+| --- | --- | --- |
+| 0.76 and up | Krea 2 Reference, Flux2 (at this size) | under-denoised, down to a blur |
+| 0.53 | P-H3-Image, H3-Image 5-step | clean, smoother |
+| 0.27 to 0.42 | H3-Image 8-step and 6-step, Linear Quadratic, Qwen Image 2.1 Turbo | clean and crisp, nearly the same picture across the range |
+| 0.232 | Simple at 6 steps, which is **MiniMax's reference recipe** | speckle |
+| below 0.2 | Simple, SGM Uniform, Beta, Bong Tangent and Normal at 8 steps | gritty: leathery skin, noise in flat areas |
+
+Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe stays one schedule and step count away. Why its last step fails here is not known: the port matches MiniMax's pipeline piece by piece, and the cause may be the model, its INT8 file or the port. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
 
 ## Editing
 
@@ -111,15 +124,14 @@ The two models take the pictures their own way, as their ComfyUI nodes do:
 
 Every reference adds its own tokens to the sequence: sixteen large pictures are a much longer run than one.
 
-Off, img2img is Forge's own with any H3 model: the input image is encoded, noised at Denoising strength and denoised on the profile's schedule. Other H3 models have no edit mode, so with the setting on img2img is refused for them.
+Off, img2img is Forge's own with either model: the input image is encoded, noised at Denoising strength and denoised on the profile's schedule. With MiniMax-H3-Image the schedules stop at sigma 0.42 or above, so even a low Denoising strength starts from a heavily noised picture: gentle refinement is not what this mode does.
 
 ## Known unknowns
 
-- MiniMax-H3-Image with P-H3-Image's text encoder is an experiment on hearsay: nothing here has compared it with the 32B encoder.
-- MiniMax-H3-Image runs, with either text encoder. Its reference recipe (Euler, Simple, 6 steps) leaves speckle in low-noise steps that the default recipe avoids. The output heads and the time-embedding table were checked numerically against MiniMax's own weights and the sampler against its pipeline, so the open comparison is the same prompt and seed in ComfyUI. It has not been tried at 16 MP or for edits.
+- MiniMax-H3-Image with P-H3-Image's text encoder is an experiment: one same-seed comparison gave a similar composition with different small details, and all the schedule tests above used it.
+- MiniMax-H3-Image runs, with either text encoder. Its reference recipe (Euler, Simple, 6 steps) leaves speckle in its last step, at sigma 0.232, which the H3-Image schedules avoid. The output heads and the time-embedding table were checked numerically against MiniMax's own weights and the sampler against its pipeline, so the open comparisons are the same prompt and seed in ComfyUI, and a checkpoint that is not INT8. It has not been tried at 16 MP or for edits.
 - The working-memory reservation is an estimate (the console prints the measured figure on the first step of every generation); 16 MP is twice the tokens of anything tried so far.
-- chroma-h3 and the stock H3 checkpoint with Pruna's LoRA have not been run yet. chroma-h3's own inference layout is not published; the extension runs it as P-H3-Image is run (one latent frame, a two-step audio stub). If that is not how it was trained, the pictures will say so.
-- A lone latent through the stock video VAE is decoded as a chunk of copies, keeping the first real frame, as ComfyUI does now; the earlier rule (decode the latent alone, keep its last frame) may look different.
+- The stock MiniMax H3 checkpoint with Pruna's LoRA has not been run yet.
 - P-H3-Image's text-to-image is soft in small detail at every size tried. The sampling path matches ComfyUI's stage by stage, and the launch flags that lower precision made no difference, so the comparison left is the same prompt in ComfyUI.
 
 ## Local tests (developers)
@@ -137,10 +149,9 @@ The tests use the real tensor names and shapes of the published files (`tests/fi
 - **[Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo)** by Haoming02
 - **[MiniMax H3](https://github.com/MiniMax-AI/MiniMax-H3)** and **[MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image)** by MiniMax
 - **[Pruna AI](https://huggingface.co/PrunaAI/P-H3-Image-Comfy)**: P-H3-Image
-- **[lodestones](https://huggingface.co/lodestones/chroma-h3)**: chroma-h3
 - **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)**: reference implementation of the models
 - **[Comfy-Org](https://huggingface.co/Comfy-Org/MiniMax-H3-Image)**: the MiniMax-H3-Image and H3 model files
-- **[Kijai](https://huggingface.co/Kijai)**: the INT8 video VAE and the W4A8 checkpoints
+- **[Kijai](https://huggingface.co/Kijai)**: the W4A8 checkpoints
 - **[Merserk](https://huggingface.co/Merserk/MiniMax-H3-INT4-ConvRot)**: the INT4 text encoder
 - **[unsloth](https://huggingface.co/unsloth/MiniMax-H3-GGUF)**: GGUF checkpoints
 

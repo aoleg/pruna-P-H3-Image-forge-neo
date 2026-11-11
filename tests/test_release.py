@@ -15,12 +15,12 @@ class ReleaseTests(unittest.TestCase):
     def setUp(self):
         from test_native import tiny_dit
 
-        from forge_h3.native.video_vae import MiniMaxH3VideoVAE
-        self.types = (type(tiny_dit(None)), MiniMaxH3VideoVAE)
+        from forge_h3.native.image_vae import H3ImageVAE, PH3ImageVAE
+        self.types = (type(tiny_dit(None)), H3ImageVAE)
         # Forge wraps the DiT in a KModel; the H3 module sits below the patcher's model
         self.dit = torch.nn.Module()
         self.dit.diffusion_model = tiny_dit(None)
-        self.vae = MiniMaxH3VideoVAE(ch=32, num_layers=1)
+        self.vae = PH3ImageVAE(ch=32, num_layers=1)
         self.other = torch.nn.Linear(8, 8)
         self.loaded = [types.SimpleNamespace(model=types.SimpleNamespace(model=m, backup={"w": torch.ones(4)}))
                        for m in (self.dit, self.vae, self.other)]

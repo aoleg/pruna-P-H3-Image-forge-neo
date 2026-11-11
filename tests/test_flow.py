@@ -21,7 +21,6 @@ from test_contracts import (
     PH3_TE,
     PH3_VAE,
     TE,
-    VAE,
     checkpoint,
 )
 
@@ -131,7 +130,7 @@ class FlowTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         root = self.root = Path(tmp.name)
         files = [checkpoint(root / f"{name}.safetensors", tensors) for name, tensors in
-                 (("model", DIT), ("encoder", TE), ("vae", VAE))]
+                 (("model", DIT), ("ph3_te", PH3_TE), ("ph3_vae", PH3_VAE))]
         stubs = {**forge_stubs.engine_modules(), **forge_modules(files)}
         self.enterContext(patch.dict(sys.modules, stubs))
         for name in ("forge_h3.native.engine", "forge_h3.native.model", "forge_h3.native.text_engine",
@@ -144,9 +143,9 @@ class FlowTests(unittest.TestCase):
         from test_native import tiny_dit
 
         from forge_h3.native.engine import MiniMaxH3Engine
-        from forge_h3.native.video_vae import MiniMaxH3VideoVAE
+        from forge_h3.native.image_vae import PH3ImageVAE
         torch.manual_seed(0)
-        vae = MiniMaxH3VideoVAE(ch=32, num_layers=1)
+        vae = PH3ImageVAE(ch=32, num_layers=1)
         with torch.no_grad():
             for p in vae.parameters():
                 torch.nn.init.normal_(p, std=0.02)
@@ -162,8 +161,8 @@ class FlowTests(unittest.TestCase):
         engine.references = []
         return engine
 
-    def use_ph3(self, preset="h3"):
-        """Select P-H3-Image's text encoder and VAE next to the checkpoint."""
+    def use_ph3(self, preset="sd"):
+        """Select P-H3-Image's text encoder and VAE next to the checkpoint (the set the tests start with)."""
         files = [checkpoint(self.root / f"{name}.safetensors", tensors) for name, tensors in
                  (("ph3_te", PH3_TE), ("ph3_vae", PH3_VAE))]
         sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files]
@@ -306,9 +305,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(tuple(self.engine.references[0].shape), (1, 1152, 2048, 3))
         self.assertEqual(tuple(self.engine.text_processing_engine_h3.images[0].shape), (1, 736, 1344, 3))
 
-    def test_img2img_needs_p_h3_image_an_input_image_and_a_plain_resize(self):
-        with self.assertRaisesRegex(H3Error, "MiniMax H3 has no edit mode.*Enable Reference"):
-            integration.before_process(Img2Img())
+    def test_img2img_needs_an_input_image_and_a_plain_resize(self):
         self.use_ph3()
         with self.assertRaisesRegex(H3Error, "Add an input image"):
             integration.before_process(Img2Img(init=False))
@@ -319,12 +316,10 @@ class FlowTests(unittest.TestCase):
         with self.assertRaisesRegex(H3Error, "up to 8 pictures"):
             integration.before_process(Img2Img(gallery=[Image.new("RGB", (32, 32))] * 8))
 
-    def test_with_reference_off_img2img_is_forges_own_for_any_h3_model(self):
+    def test_with_reference_off_img2img_is_forges_own(self):
         sys.modules["modules.shared"].opts.h3_do_reference = False
-        for ph3 in (False, True):
-            with self.subTest(ph3=ph3):
-                if ph3:
-                    self.use_ph3()
+        for repeat in (False, True):
+            with self.subTest(repeat=repeat):
                 p = Img2Img(gallery=[Image.new("RGB", (40, 80), "green")])  # the gallery is not an edit reference now
                 p.prompt = "a bird takes off"
                 cond = self.run_until_sampling(p)
@@ -369,8 +364,8 @@ class FlowTests(unittest.TestCase):
         tokens = 6 * 4 // 4 + 4 + engine_module.TEXT_TOKENS_RESERVED
         self.assertEqual(self.engine.forge_objects.unet.extra_preserved_memory_during_sampling,
                          tokens * engine_module.SAMPLING_BYTES_PER_TOKEN + engine_module.SAMPLING_FIXED_BYTES)
-        # outside the h3 preset the Shift slider belongs to another model: H3 keeps its own
-        self.assertEqual(p.distilled_cfg_scale, 3.0)
+        # outside the ph3 preset the Shift slider belongs to another model: P-H3-Image keeps its own
+        self.assertEqual(p.distilled_cfg_scale, 1.0)
         # one sampler step through the real DiT, then the decode Forge saves
         dit = self.engine.forge_objects.unet.model.diffusion_model
         out = dit(p.modified_noise, torch.tensor([900.0]), cond[0].unsqueeze(0))
@@ -395,15 +390,15 @@ class FlowTests(unittest.TestCase):
         self.run_until_sampling(p)
         self.assertEqual(p.distilled_cfg_scale, 2.0)
 
-    def test_the_h3_preset_keeps_the_slider_and_fills_the_api_default(self):
-        sys.modules["modules.shared"].opts.forge_preset = "h3"
+    def test_the_ph3_preset_keeps_the_slider_and_fills_the_api_default(self):
+        sys.modules["modules.shared"].opts.forge_preset = "ph3"
         p = Txt2Img()
         p.distilled_cfg_scale = 6.0
         self.run_until_sampling(p)
         self.assertEqual(p.distilled_cfg_scale, 6.0)
         p = Txt2Img()
         p.is_api = True
-        sys.modules["modules.shared"].opts.h3_t2i_dcfg = 10.0
+        sys.modules["modules.shared"].opts.ph3_t2i_dcfg = 10.0
         self.run_until_sampling(p)
         self.assertEqual(p.distilled_cfg_scale, 10.0)
 
@@ -446,13 +441,13 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((self.engine.references, self.engine.generation.refs), ([], []))
 
     def test_a_rejected_img2img_stops_at_the_model(self):
-        with self.assertRaisesRegex(H3Error, "no edit mode"):
-            integration.before_process(Img2Img())
+        with self.assertRaisesRegex(H3Error, "Add an input image"):
+            integration.before_process(Img2Img(init=False))
         # the pending error reaches the model and the encoder, which Forge calls directly
         dit = self.engine.forge_objects.unet.model.diffusion_model
-        with self.assertRaisesRegex(H3Error, "no edit mode"):
+        with self.assertRaisesRegex(H3Error, "Add an input image"):
             dit(torch.zeros(1, 1, 1, 8), torch.tensor([900.0]), torch.zeros(1, 7, 48))
-        with self.assertRaisesRegex(H3Error, "no edit mode"):
+        with self.assertRaisesRegex(H3Error, "Add an input image"):
             self.engine.encode_first_stage(torch.zeros(1, 3, HEIGHT, WIDTH))
 
     def test_a_batch_of_pictures_needs_batch_count(self):

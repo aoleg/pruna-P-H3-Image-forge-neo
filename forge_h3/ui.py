@@ -8,7 +8,7 @@ import gradio as gr
 from .contracts import H3Error
 from .integration import checkpoint_info
 from .models import ROLE_LABELS, inspect_model
-from .profiles import H3, H3_IMAGE, H3_IMAGE_REFERENCE
+from .profiles import H3_IMAGE, H3_IMAGE_REFERENCE
 
 COMPONENTS = {}
 NATIVE_CONTROLS = ("sampling", "scheduler", "cfg_scale")
@@ -47,7 +47,7 @@ class Panel:
                             "in all for MiniMax-H3-Image, 8 for P-H3-Image). Name them in the prompt (\"the hat from "
                             "<Picture 2>\"). The picture is generated at Width x Height; Resize mode and Denoising "
                             "strength are not used. With the setting off, img2img is Forge's own: the input image is "
-                            "noised at Denoising strength, with any H3 model.")
+                            "noised at Denoising strength, with either model.")
             with gr.Accordion("Components", open=False):
                 self.summary = gr.Markdown("")
         self.bound = False
@@ -156,7 +156,7 @@ class Panel:
         logger.info("H3 native controls connected for %s.", self.tab)
 
 
-def preset_settings(tab, profile=H3):
+def preset_settings(tab, profile=H3_IMAGE):
     """The sampler, schedule and CFG saved for the profile's preset in Settings, which start from the profile's recipe
     (every Forge sampler and schedule works); a CFG of 0 there keeps the current one (None), as Forge's presets do."""
     kind = "i2i" if tab == "img2img" else "t2i"

@@ -28,7 +28,9 @@ class PredictionH3Image(PredictionDiscreteFlow):
         n = grid.shape[0] - 1
         pos = (timestep / self.multiplier).clamp(0.0, 1.0) * n
         nearest = pos.round()
-        pos = torch.where((pos - nearest).abs() < SNAP, nearest, pos)
+        # never onto sigma 0: the table's first entry is the model's sigma_min, and a schedule that reaches a zero
+        # sigma before its last step (Normal) or takes its logarithm divides by zero
+        pos = torch.where(((pos - nearest).abs() < SNAP) & (nearest > 0), nearest, pos)
         i = pos.floor().long().clamp(max=n - 1)
         return torch.lerp(grid[i], grid[i + 1], pos - i)
 

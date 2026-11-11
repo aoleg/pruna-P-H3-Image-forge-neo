@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from test_contracts import DIT, TE, VAE, checkpoint
+from test_contracts import DIT, PH3_TE, PH3_VAE, TE, checkpoint
 
 
 @unittest.skipUnless(importlib.util.find_spec("gradio"), "Gradio is optional for CPU tests")
@@ -66,12 +66,12 @@ class GradioSmoke(unittest.TestCase):
             root = Path(scratch)
             dit = checkpoint(root / "community.safetensors", DIT)
             components = [checkpoint(root / (name + ".safetensors"), tensors)
-                          for name, tensors in (("encoder", TE), ("vae", VAE))]
+                          for name, tensors in (("encoder", PH3_TE), ("vae", PH3_VAE))]
             info = types.SimpleNamespace(filename=str(dit), title="Community", name="Community")
             modules = types.ModuleType("modules")
-            # the h3 preset as the user saved it in Settings (issue #5); img2img left at its defaults
+            # the ph3 preset as the user saved it in Settings (issue #5); img2img left at its defaults
             modules.shared = types.SimpleNamespace(opts=types.SimpleNamespace(
-                h3_t2i_sampler="Euler", h3_t2i_scheduler="Automatic", h3_t2i_cfg=3.5))
+                ph3_t2i_sampler="Euler", ph3_t2i_scheduler="Automatic", ph3_t2i_cfg=3.5))
             modules.paths = types.SimpleNamespace(models_path=str(root))
             modules.sd_models = types.SimpleNamespace(checkpoint_aliases={"Community": info}, checkpoints_list={"Community": info},
                                                       get_closet_checkpoint_match={"Community": info}.get)
@@ -82,7 +82,7 @@ class GradioSmoke(unittest.TestCase):
                 with gr.Blocks() as demo:
                     ckpt = gr.Dropdown(["Regular", "Community"], value="Regular", elem_id="setting_sd_model_checkpoint")
                     mods = gr.Dropdown([p.name for p in components], value=[p.name for p in components], multiselect=True, elem_id="setting_sd_modules")
-                    preset = gr.Dropdown(["sd", "h3"], value="sd", elem_id="forge_ui_preset")
+                    preset = gr.Dropdown(["sd", "ph3"], value="sd", elem_id="forge_ui_preset")
                     ui.capture(ckpt)
                     ui.capture(mods)
                     ui.capture(preset)
@@ -113,13 +113,20 @@ class GradioSmoke(unittest.TestCase):
                 enter = fn("Community", [p.name for p in components], {"active": False}, "DPM++ 2M", "Automatic", 7, "sd")
                 self.assertTrue(enter[0]["visible"])
                 self.assertIn("encoder.safetensors (plain)", enter[2])
-                self.assertIn("**Model:** MiniMax H3", enter[2])
-                self.assertIn("MiniMax H3 makes one still image", enter[1])
+                self.assertIn("**Model:** P-H3-Image", enter[2])
+                self.assertIn("P-H3-Image makes one still image", enter[1])
                 self.assertEqual([enter[i]["value"] for i in (4, 5, 6)], ["Euler", "Automatic", 3.5])
-                self.assertEqual(ui.preset_settings("img2img"), ("Euler", "Simple", 3.0))
-                modules.shared.opts.h3_t2i_cfg = 0
-                self.assertIsNone(ui.preset_settings("txt2img")[2])
-                modules.shared.opts.h3_t2i_cfg = 3.5
+                from forge_h3.profiles import H3_IMAGE, PH3_IMAGE
+                self.assertEqual(ui.preset_settings("img2img", PH3_IMAGE), ("Euler", "P-H3-Image", 1.0))
+                self.assertEqual(ui.preset_settings("img2img"), ("Euler", "H3-Image 8-step", 1.0))
+                self.assertEqual(ui.preset_settings("txt2img", H3_IMAGE), ui.preset_settings("img2img"))
+                modules.shared.opts.ph3_t2i_cfg = 0
+                self.assertIsNone(ui.preset_settings("txt2img", PH3_IMAGE)[2])
+                modules.shared.opts.ph3_t2i_cfg = 3.5
+                # MiniMax H3 with its own text encoder is the video model: the status line says what to select
+                video = fn("Community", [str(checkpoint(root / "h3_te.safetensors", TE)), components[1].name], enter[3],
+                           "Euler", "Automatic", 3.5, "sd")
+                self.assertIn("audio-video checkpoint makes still images with the P-H3-Image text encoder", video[1])
                 # a missing module is reported in the status line
                 partial = fn("Community", [components[0].name], enter[3], "Euler", "Automatic", 3.5, "sd")
                 self.assertIn("Select the H3 VAE", partial[1])
@@ -127,7 +134,7 @@ class GradioSmoke(unittest.TestCase):
                 self.assertEqual(leave[4]["value"], "DPM++ 2M")
                 self.assertEqual(leave[6]["value"], 7)
                 self.assertFalse(leave[0]["visible"])
-                # the UI preset stays free: switching it is how the user leaves H3, and "h3" is a preset of its own
+                # the UI preset stays free: switching it is how the user leaves H3, and "ph3" is a preset of its own
                 self.assertNotIn("interactive", enter[7])
                 self.assertNotIn("interactive", leave[7])
                 # Hires. fix is hidden and turned off with H3, shown again after

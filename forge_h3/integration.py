@@ -98,9 +98,6 @@ def validate_img2img(p, components, reference):
         raise H3Error(f"Add an input image for H3 in img2img: it becomes {role}.")
     if getattr(p, "resize_mode", 0) == LATENT_UPSCALE:
         raise H3Error("H3 does not take the latent upscale resize mode. Choose another Resize mode.")
-    if reference and not components.profile.max_pictures:
-        raise H3Error(f"{components.profile.label} has no edit mode: references need MiniMax-H3-Image or P-H3-Image. "
-                      "Turn off [H3] Enable Reference in Settings for standard img2img.")
 
 
 _precision_noted = False

@@ -64,6 +64,12 @@ class GridPredictorTests(unittest.TestCase):
         self.assertEqual((self.predictor.percent_to_sigma(0.0), self.predictor.percent_to_sigma(1.0)), (1.0, 0.0))
         self.assertAlmostEqual(self.predictor.percent_to_sigma(0.5), 0.75, places=6)
 
+    def test_the_smallest_sigma_is_above_zero(self):
+        # Normal steps down to sigma_min before its closing 0, and a zero there divides by zero in the sampler
+        sigmas = self.predictor.sigmas
+        self.assertAlmostEqual(float(sigmas[0]), GRID[-2] * 6 / 1000, places=7)
+        self.assertGreater(float(sigmas[1]), float(sigmas[0]))
+
 
 if __name__ == "__main__":
     unittest.main()

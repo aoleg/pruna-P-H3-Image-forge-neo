@@ -110,7 +110,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         self.forge_objects_after_applying_lora = self.forge_objects.shallow_copy()
 
         self.is_h3 = True
-        # Forge's Shift slider (the "h3" UI preset) sets the flow shift of both streams
+        # Forge's Shift slider sets the flow shift of both streams (P-H3-Image; MiniMax-H3-Image is on its own grid)
         self.use_shift = True
         self.shift = SHIFT
         self.generation: Generation | None = None

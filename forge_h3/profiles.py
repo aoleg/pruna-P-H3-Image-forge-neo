@@ -1,4 +1,4 @@
-"""The kinds of still-image H3 model and their sampling recipes. Torch only, so CPU tests cover it."""
+"""The kinds of still-image H3 model, their sampling recipes and their schedules. Torch only, so CPU tests cover it."""
 
 from dataclasses import dataclass
 
@@ -11,6 +11,27 @@ PH3_IMAGE_HIDDEN_STATES = [13, 19, 25, 31, 36]
 # how the prompt names a picture before its vision block
 PICTURE_LABEL = "<Picture %d>: "
 H3_IMAGE_PICTURE_LABEL = "Picture %d: "
+
+# the sigma grid of MiniMax-H3-Image's six output heads (the checkpoint's pdd_config.json)
+H3_IMAGE_PDD_SIGMAS = (1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0)
+
+# The MiniMax-H3-Image schedules. Same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP): the picture is clean when
+# the last model evaluation is at sigma 0.27 or above and the sampler jumps from there to 0, and comes out gritty when
+# the model is evaluated lower: the grid's own last point, 0.232, already leaves speckle, and Simple at 8 steps (0.38,
+# then 0.17) is far worse. Anything from 0.27 to 0.42 gives the same picture, 0.53 a softer one, 0.76 an under-denoised
+# one. So each schedule ends at a fixed sigma well inside the clean range, whatever the step count.
+H3_IMAGE_TAIL = 0.42
+# "H3-Image 8-step": a shifted flow curve, sigma = s t / (1 + (s - 1) t) with t uniform from 1 down to 1/8, where s
+# puts the last point on the tail (s = 5.069). The crispest of the tested lists; more steps sample the same curve.
+H3_IMAGE_8_STEP = "H3-Image 8-step"
+H3_IMAGE_CURVE_END = 1.0 / 8.0
+H3_IMAGE_CURVE_SHIFT = H3_IMAGE_TAIL * (1.0 / H3_IMAGE_CURVE_END - 1.0) / (1.0 - H3_IMAGE_TAIL)
+# "H3-Image 6-step": the checkpoint's grid as MiniMax made it, with the last point lifted from 0.232 to the tail
+H3_IMAGE_6_STEP = "H3-Image 6-step"
+H3_IMAGE_6_STEP_SIGMAS = H3_IMAGE_PDD_SIGMAS[:5] + (H3_IMAGE_TAIL,)
+# "H3-Image 5-step": the grid without its last point; the fastest, with a little more grain
+H3_IMAGE_5_STEP = "H3-Image 5-step"
+H3_IMAGE_5_STEP_SIGMAS = H3_IMAGE_PDD_SIGMAS[:5]
 
 
 @dataclass(frozen=True)
@@ -25,7 +46,7 @@ class Profile:
     size: int          # the recommended side of a square picture
     text_encoder: str  # the text encoder variant it needs (models.ModelInfo.variant)
     vae: str           # the VAE variant it needs
-    dit: str = "h3"    # the checkpoint variant
+    dit: str = "h3"    # the checkpoint variant: "h3" is the audio-video layout P-H3-Image is released in
     # the edit mode of img2img: how many pictures it takes (0 = none), how the prompt names them, and whether a short
     # instruction gets "Edit <Picture 1>. " in front
     max_pictures: int = 0
@@ -35,44 +56,48 @@ class Profile:
     shift_used: bool = True
 
 
-# an H3 checkpoint with its own text encoder and VAE, as a still-image model: the recipe of lodestones' chroma-h3
-# fine-tune (its LoRA on any H3 checkpoint, about 30 Euler steps at CFG 3 and shift 3, around 1 MP); its few-step
-# DMD LoRA wants 4 or 8 steps at CFG 1 instead
-H3 = Profile(name="h3", label="MiniMax H3", sampler="Euler", scheduler="Simple", steps=30, cfg=3.0, shift=3.0,
-             size=1024, text_encoder="h3", vae="h3")
-# Pruna's P-H3-Image: its 4B text encoder and single-frame VAE, 8 MP output
+# Pruna's P-H3-Image: its 4B text encoder and single-frame VAE in front of an H3 audio-video DiT (Pruna's own
+# checkpoint, or MiniMax H3 with Pruna's LoRA), 8 MP output
 PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0, shift=1.0,
                     size=2912, text_encoder="ph3-image", vae="ph3-image", max_pictures=8, edit_prefix=True)
 # MiniMax's own MiniMax-H3-Image: the H3 DiT without the audio stream, six output heads distilled on the checkpoint's
 # sigma grid, the H3 32B text encoder and a 2D image VAE; no CFG, about 4 to 20 MP, best around 16 MP.
-# MiniMax's reference recipe is Euler, Simple, 6 steps (Simple lands on the checkpoint's grid). The default here is
-# the owner's pick after same-seed tests on an RTX 5090: Pruna's sigma grid at 8 steps, which stays above sigma 0.53
-# and takes the last step from there, came out clean where the reference's two low-noise steps left speckle. The
-# reference recipe stays one schedule and step count away.
-H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0,
+# MiniMax's reference recipe is Euler, Simple, 6 steps (Simple lands on the checkpoint's grid); its last step, at sigma
+# 0.232, left speckle in the owner's tests, so the default is the 8-step schedule above. The reference recipe stays one
+# schedule and step count away.
+H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler=H3_IMAGE_8_STEP, steps=8, cfg=1.0,
                    shift=1.0, size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,
                    picture_label=H3_IMAGE_PICTURE_LABEL, shift_used=False)
 # MiniMax's reference recipe for it, for the panel and the documentation
 H3_IMAGE_REFERENCE = ("Euler", "Simple", 6)
 
-ALL = (H3, PH3_IMAGE, H3_IMAGE)
-# the audio-video checkpoints share one layout: the text encoder tells P-H3-Image from H3
-PROFILES = {profile.text_encoder: profile for profile in (H3, PH3_IMAGE)}
+ALL = (PH3_IMAGE, H3_IMAGE)
 
 
-def for_text_encoder(variant: str) -> Profile:
-    return PROFILES[variant]
+def for_components(dit: str, text_encoder: str) -> Profile | None:
+    """The image checkpoint is told by its own tensors; an audio-video checkpoint is a still-image model only behind
+    P-H3-Image's text encoder. None for any other set (MiniMax H3 with its own text encoder is a video model)."""
+    if dit == H3_IMAGE.dit:
+        return H3_IMAGE
+    return PH3_IMAGE if text_encoder == PH3_IMAGE.text_encoder else None
 
 
-def for_components(dit: str, text_encoder: str) -> Profile:
-    """The image checkpoint is told by its own tensors; the others by the selected text encoder."""
-    return H3_IMAGE if dit == H3_IMAGE.dit else for_text_encoder(text_encoder)
+def resample(points, n: int, device=None):
+    """Forge scheduler body: the sigma list as it is at its own step count, and for another count the same shape
+    resampled (linear interpolation over the step index); the first and the last sigma never move, then 0."""
+    import torch
+    points = torch.tensor(points, dtype=torch.float64)
+    if n != len(points):
+        positions = torch.linspace(0.0, len(points) - 1.0, max(int(n), 1), dtype=torch.float64)
+        lower = positions.floor().long().clamp(max=len(points) - 2)
+        points = torch.lerp(points[lower], points[lower + 1], positions - lower)
+    return torch.cat([points, points.new_zeros(1)]).to(dtype=torch.float32, device=device)
 
 
 def ph3_image_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
     """Forge scheduler function: Pruna's 8-step grid as it is, and for another step count the same curve resampled
-    (linear interpolation over the step index, so a 4-step run keeps the grid's shape). Shift does not apply: the grid
-    is given in the model's own sigma space, as ComfyUI's ManualSigmas is."""
+    (linear interpolation over the step index, the closing 0 included, so a 4-step run keeps the grid's shape). Shift
+    does not apply: the grid is given in the model's own sigma space, as ComfyUI's ManualSigmas is."""
     import torch
     grid = torch.tensor(PH3_IMAGE_SIGMAS, dtype=torch.float64)
     if n == len(grid) - 1:
@@ -82,3 +107,29 @@ def ph3_image_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs
         lower = positions.floor().long().clamp(max=len(grid) - 2)
         sigmas = torch.lerp(grid[lower], grid[lower + 1], positions - lower)
     return sigmas.to(dtype=torch.float32, device=device)
+
+
+def h3_image_8_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
+    """The shifted flow curve from 1 to the tail over n steps, then 0: at 8 steps the tested list, at any other count
+    the same curve sampled coarser or finer. The model's sigma bounds and the Shift slider do not apply."""
+    import torch
+    t = torch.linspace(1.0, H3_IMAGE_CURVE_END, max(int(n), 1), dtype=torch.float64)
+    sigmas = H3_IMAGE_CURVE_SHIFT * t / (1.0 + (H3_IMAGE_CURVE_SHIFT - 1.0) * t)
+    return torch.cat([sigmas, sigmas.new_zeros(1)]).to(dtype=torch.float32, device=device)
+
+
+def h3_image_6_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
+    return resample(H3_IMAGE_6_STEP_SIGMAS, n, device)
+
+
+def h3_image_5_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
+    return resample(H3_IMAGE_5_STEP_SIGMAS, n, device)
+
+
+# Forge schedules: (name, label, function)
+SCHEDULERS = (
+    ("ph3_image", PH3_IMAGE_SCHEDULER, ph3_image_sigmas),
+    ("h3_image_8", H3_IMAGE_8_STEP, h3_image_8_step_sigmas),
+    ("h3_image_6", H3_IMAGE_6_STEP, h3_image_6_step_sigmas),
+    ("h3_image_5", H3_IMAGE_5_STEP, h3_image_5_step_sigmas),
+)
