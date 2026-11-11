@@ -97,9 +97,17 @@ MiniMax-H3-Image has three schedules of its own, each named for the step count i
 | **H3-Image 8-step softer** | 8 | the same 0.42 end with a slower start: each sigma halfway between the 8-step curve and Pruna's grid | smoother skin and fewer dark specks, faces still defined |
 | **H3-Image 6-step** | 6 | MiniMax's own six-point grid with its last point lifted from 0.232 to 0.42 | clean, three quarters of the time |
 
-The first sigmas decide how smooth the picture is, and the last one barely matters. From crisp to smooth, the order is H3-Image 8-step, H3-Image 8-step softer, then the P-H3-Image schedule. The three give different compositions on the same seed.
+The first sigmas decide how smooth the picture is, and the last one barely matters. From crisp to smooth, the order is H3-Image 8-step, H3-Image 8-step softer, then the P-H3-Image schedule. The first sigmas also choose the composition: at 8.9 MP the three kept the same one on seed 42, as below, but at 6.4 MP they often gave different ones.
+
+The same seed and prompt on the three schedules, with Heun at 3648×2432. Each row shows the whole picture and a 1:1 crop; open the image to see the crop at full size.
+
+![H3-Image 8-step, H3-Image 8-step softer and P-H3-Image on a street scene: skin and fabric go from crisp to smooth](images/schedules_tram.jpg)
+
+![The same three schedules on an indoor portrait of two people: hair, beard and skin go from crisp to smooth](images/schedules_couple.jpg)
 
 **Heun** at 8 steps (15 model evaluations against Euler's 8) gives sharper faces than Euler on all three, with more small dark specks that look like dust on a scanned slide. Euler stays the default because it is twice as fast.
+
+![Euler against Heun on H3-Image 8-step at 6.4 MP: the Heun face is sharper, the Euler face softer](images/heun_euler.jpg)
 
 Each runs at any other step count too: the list is resampled between its two fixed ends, so 10 or 12 steps of the 8-step schedule sample the same curve more finely and never go below its last sigma. More steps are different, not better: 12 steps gave more skin texture and blemishes than 8. The step count also changes the composition, because the first sigmas choose it.
 
@@ -112,6 +120,14 @@ These schedules are a personal pick from same-seed tests on an RTX 5090 (Euler, 
 | 0.27 to 0.42 | the three H3-Image schedules, Linear Quadratic, Qwen Image 2.1 Turbo | clean and crisp, nearly the same picture across the range |
 | 0.232 | Simple at 6 steps, which is **MiniMax's reference recipe** | speckle |
 | below 0.2 | Simple, SGM Uniform, Beta, Bong Tangent and Normal at 8 steps | gritty: leathery skin, noise in flat areas |
+
+Four rows of the table on one seed with Euler at 6.4 MP, with a 1:1 crop of the face below each picture:
+
+![Krea 2 Reference, P-H3-Image, H3-Image 8-step and Simple at 8 steps on one portrait: waxy, smooth, crisp, then gritty skin](images/last_sigma.jpg)
+
+MiniMax's reference recipe, Simple at 6 steps, against Simple at 8 steps and the P-H3-Image schedule, with Euler at 8.7 MP:
+
+![Simple at 6 steps leaves speckle on the face and the wall, Simple at 8 steps leaves grit, P-H3-Image is clean](images/minimax_reference.jpg)
 
 Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe stays one schedule and step count away. Why its last step fails here is not known: the port matches MiniMax's pipeline piece by piece, and the cause may be the model, its INT8 file or the port. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
 
