@@ -13,7 +13,7 @@ An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02
 >
 > P-H3-Image stays supported. It is still a good **edit-and-upscale** model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds.
 >
-> **Generate MiniMax-H3-Image at about 16 MP, or use an LCM sampler.** MiniMax's reference recipe, Euler with Simple at 6 steps, is clean at 16 MP but leaves speckle below about 9 MP, in ComfyUI too. An LCM sampler on the same six sigmas is clean at every size I tried, so the default is the **H3-Image LCM** sampler, Simple, 6 steps; see [Settings](#settings). For finer texture, try P-H3-Image's VAE in place of MiniMax's. **Still untested:** MiniMax-H3-Image's edit mode, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+> **Use a sampler that adds fresh noise at each step.** MiniMax's reference recipe, Euler with Simple at 6 steps, leaves speckle below about 9 MP, in ComfyUI too, and at 16 MP clumped, painterly texture, like a small sensor with heavy noise reduction. On the same six sigmas, the **H3-Image LCM** sampler (the default) is smooth and clean at every size I tried, and **Euler a** is clean with crisper detail; see [Settings](#settings). Generate at about 16 MP for the most detail, and try P-H3-Image's VAE in place of MiniMax's for finer texture. **Still untested:** MiniMax-H3-Image's edit mode, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
 >
 > The repository keeps its old name for now.
 >
@@ -108,9 +108,13 @@ Tested with Forge's own LCM on three prompts and four seeds at 3648×2432 (the n
 
 With LCM the picture is the model's clean estimate from the last step, so the last sigma should be low: the opposite of the Euler rule in the table further down.
 
-At 16 MP (4096×4096) Euler with Simple at 6 steps is clean too, with the same INT8 checkpoint and P-H3-Image text encoder: the model is tuned for that size, and the speckle is a symptom of smaller pictures. Euler there is crisper and more weathered than LCM, with deeply lined old faces and frizzy beards; LCM stays smoother.
+At 16 MP (4096×4096) Euler with Simple at 6 steps loses the speckle, with the same INT8 checkpoint and P-H3-Image text encoder: the model is tuned for that size. At 100% the same flaw shows in another form, as clumped, painterly texture: beards break into flat tufts and skin turns blotchy, like a photo from a small sensor with heavy noise reduction. At a distance, as in the skies and crowns below, it reads as crisp.
 
 ![Euler and H3-Image LCM, both Simple at 6 steps, on a baobab avenue at 4096x4096: both skies are clean, Euler's crowns are crisper](images/euler_16mp.jpg)
+
+**Euler a** avoids the clumping. It adds fresh noise at each step too, about 70 to 85% of what the next output head sees on Simple at 6 steps, so its last steps get noise close to what the heads were trained on. At 16 MP it sits between the two: beards keep distinct strands, skin looks natural, and frost and fur have more bite than with LCM. On Simple and on H3-Image 6-step it gives almost the same picture (a mean difference of 2 of 255), so with Euler a the last sigma hardly matters.
+
+![Euler, H3-Image LCM and Euler a at 16 MP, 2x crops of a frosted face and beard: Euler's beard is clumped and its skin blotchy, LCM's is smooth with soft strands, Euler a's keeps distinct strands and natural skin on both schedules](images/samplers_16mp.jpg)
 
 ![Heun on the P-H3-Image schedule, LCM on the P-H3-Image schedule, and LCM on Simple at 6 steps: crisp, smeared, then clean and natural](images/lcm_tram.jpg)
 
@@ -120,17 +124,18 @@ LCM pictures are softer and lower in contrast than Heun's. Heun is crisper, but 
 
 ### Other samplers
 
-Samplers that add fresh noise at each step also avoid most of Euler's speckle, each with its own look. Tested on the street scene with two seeds at 3648×2432:
+Samplers that add fresh noise at each step also avoid most of Euler's speckle, each with its own look. Tested on the street scene with two seeds at 3648×2432, and on a portrait at 16 MP:
 
 | Use | Sampler, schedule | Look |
 | --- | --- | --- |
 | Default | **H3-Image LCM**, Simple, 6 steps | natural, clean, the fastest |
-| Crisp at 16 MP | **Euler**, Simple, 6 steps (MiniMax's reference) | crisp and weathered; speckle below about 9 MP |
-| A little crisper | **Euler a**, H3-Image 8-step, 8 steps | clean and natural, crisper faces, text as reliable |
+| Crisper | **Euler a**, Simple, 6 steps | clean and natural with more bite: distinct hair strands, bold frost and fur |
+| MiniMax's reference | **Euler**, Simple, 6 steps | speckle below about 9 MP; at 16 MP clumped, painterly texture at 100% |
+| A little crisper, 8 steps | **Euler a**, H3-Image 8-step, 8 steps | clean and natural, crisper faces, text as reliable |
 | Vivid | **ER SDE**, any schedule | saturated and the sharpest, but over-processed: haloed reflections, warped background faces, more text mistakes |
 | Crisp | **Heun**, an H3-Image schedule | crisp, with dark dust specks in bright areas; 15 evaluations |
 
-Euler a on Simple at 6 steps left faint pale blotches in a bright window on one picture of the room scene; on H3-Image 8-step none were seen. DPM++ SDE, DPM++ 2M SDE and DPM++ 3M SDE run (they gave NaN before 0.12.1) but are not compared here.
+Euler a on Simple at 6 steps left faint pale blotches in a bright window on one picture of the room scene at 3648×2432; at 16 MP and on H3-Image 8-step none were seen. DPM++ SDE, DPM++ 2M SDE and DPM++ 3M SDE run (they gave NaN before 0.12.1) but are not compared here.
 
 ### The H3-Image schedules, for Euler and Heun
 
@@ -175,6 +180,10 @@ MiniMax's reference recipe, Simple at 6 steps, against Simple at 8 steps and the
 ![Simple at 6 steps leaves speckle on the face and the wall, Simple at 8 steps leaves grit, P-H3-Image is clean](images/minimax_reference.jpg)
 
 Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe is one sampler away. The failure is not this port's: MiniMax's own ComfyUI workflow, run in SwarmUI, gives the same speckle, and MiniMax's diffusers scheduler takes an Euler step as well. It comes from Euler below 16 MP: LCM on the same sigmas is clean at any size, and so is Euler at 16 MP. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
+
+### Output scale
+
+The H3 VAEs decode each latent position into a 16×16 block of pixels, twice the side of most image models' VAEs, so much of the finest texture is invented by the decoder and can look gritty or "upscaled" at 100%. **Settings → MiniMax H3 → [H3] Output scale** shrinks the decoded picture by **1/2** or **1/4** with an area filter, each output pixel the mean of a 2×2 or 4×4 block, before Forge saves it. Generate at about 16 MP and save at 1/2 for a clean 4 MP picture. The infotext records the setting; its Size stays the generated size. The setting averages away the decoder's pixel-level texture but not the sampler's speckle or clumping, which are larger than a pixel: for those, use H3-Image LCM or Euler a.
 
 ## Editing
 

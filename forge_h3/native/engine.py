@@ -120,6 +120,8 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         # standard img2img: Forge's input image is encoded and noised at Denoising strength (the [H3] Enable
         # Reference setting off); otherwise the input image is <Picture 1> and encode_first_stage is a placeholder
         self.img2img_input = False
+        # the [H3] Output scale setting: the decoded picture is shrunk by this whole factor (area filter)
+        self.output_scale = 1
 
     def _h3_predictor(self, estimated_config):
         """MiniMax-H3-Image samples on the sigma grid its output heads were distilled on; the others on Forge's
@@ -147,6 +149,12 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
     def set_img2img(self, standard: bool) -> None:
         """Called by the script for every generation: whether Forge's img2img input image starts the sampling."""
         self.img2img_input = bool(standard)
+
+    def set_output_scale(self, divisor: int) -> None:
+        """Called by the script for every generation: 1 keeps the decoded picture, 2 or 4 shrinks each side by that
+        factor with an area filter (each output pixel the mean of a 2x2 or 4x4 block), which averages away the
+        pixel-level texture the 16x decoder invents. H3 sizes are multiples of 32, so the factor always divides them."""
+        self.output_scale = max(int(divisor), 1)
 
     def condition_images(self) -> list[torch.Tensor]:
         """The pictures the text encoder sees before the prompt as "<Picture i>" (ComfyUI's vision copies)."""
@@ -253,5 +261,8 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         if not finite(pixels):
             advice = " Start Forge Neo with --fp32-vae." if vae.vae_dtype != torch.float32 else ""
             raise H3Error(f"The H3 VAE produced NaN or Inf values: the picture would come out black.{advice}")
-        generation.frame = pixels[:, :, 0].float().cpu()
+        frame = pixels[:, :, 0].float()
+        if self.output_scale > 1:
+            frame = torch.nn.functional.avg_pool2d(frame, self.output_scale)
+        generation.frame = frame.cpu()
         return generation.frame.mul(2.0).sub(1.0)

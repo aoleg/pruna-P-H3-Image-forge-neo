@@ -83,6 +83,9 @@ def script_before_process(p):
 
 
 REFERENCE_SETTING = "h3_do_reference"
+OUTPUT_SCALE_SETTING = "h3_output_scale"
+# the setting's choices and the factor each side is shrunk by
+OUTPUT_SCALES = {"1": 1, "1/2": 2, "1/4": 4}
 
 
 def reference_mode() -> bool:
@@ -90,6 +93,13 @@ def reference_mode() -> bool:
     input image as <Picture 1>; off, img2img is Forge's standard one, the input image noised at Denoising strength."""
     from modules import shared
     return bool(getattr(shared.opts, REFERENCE_SETTING, True))
+
+
+def output_scale() -> tuple[str, int]:
+    """The [H3] Output scale setting: its label and the factor each side of the decoded picture is shrunk by."""
+    from modules import shared
+    label = str(getattr(shared.opts, OUTPUT_SCALE_SETTING, "1"))
+    return (label, OUTPUT_SCALES[label]) if label in OUTPUT_SCALES else ("1", 1)
 
 
 def validate_img2img(p, components, reference):
@@ -184,6 +194,10 @@ def process(p):
     profile = p.h3_components.profile
     engine.set_references(refs, getattr(p, "h3_vision", None) if refs else None, profile.picture_label)
     engine.set_img2img(getattr(p, "h3_standard_img2img", False))
+    scale_label, scale = output_scale()
+    engine.set_output_scale(scale)
+    if scale > 1:
+        p.extra_generation_params["H3 Output scale"] = scale_label
     if request.references:
         p.extra_generation_params["H3 Edit pictures"] = request.references
 

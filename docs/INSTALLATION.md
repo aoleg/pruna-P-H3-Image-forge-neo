@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.12.2. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.13.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -73,6 +73,8 @@ Files are recognized by their tensor layout, not by their name.
 5. For a LoRA, add it to the prompt: `<lora:p-h3-image_lora_bf16:1>` puts P-H3-Image on a MiniMax H3 checkpoint. On a quantized checkpoint the extension keeps the INT8 matmuls and adds the LoRA as a low-rank term; set **Diffusion in Low Bits** to **Automatic (fp16 LoRA)** if Forge reports it cannot merge the LoRA.
 
 ## img2img
+
+**Settings → MiniMax H3 → [H3] Output scale** (1 by default) shrinks the decoded picture by 1/2 or 1/4 with an area filter before Forge saves it; see the README.
 
 **Settings → MiniMax H3 → [H3] Enable Reference** is on by default: img2img is an edit, with MiniMax-H3-Image or P-H3-Image. Off, img2img is Forge's standard one with either model: the input image is encoded and noised at Denoising strength. The H3-Image schedules stop at sigma 0.42 or above, so with MiniMax-H3-Image even a low Denoising strength starts from a heavily noised picture.
 

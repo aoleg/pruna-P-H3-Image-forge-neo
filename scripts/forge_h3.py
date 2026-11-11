@@ -68,6 +68,13 @@ def settings():
                            .info("enable Edit ; disable img2img")
                            .info("pin to <b>Quicksettings</b> is recommended if changed often")
                            .info("Edit needs P-H3-Image"))
+    import gradio as gr
+
+    shared.opts.add_option(integration.OUTPUT_SCALE_SETTING,
+                           shared.OptionInfo("1", "[H3] Output scale", gr.Radio,
+                                             {"choices": list(integration.OUTPUT_SCALES)}, section=section)
+                           .info("shrinks the decoded picture with an area filter, for less pixel-level grit; "
+                                 "1/2 of a 16 MP picture is 4 MP"))
 
 
 script_callbacks.on_ui_settings(settings)
