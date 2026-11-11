@@ -56,6 +56,8 @@ The checkpoint asks for comfy-kitchen's INT8 attention, which ComfyUI then uses;
 
 ![The same 16 MP latent decoded by MiniMax-H3-Image's VAE and by P-H3-Image's: the 2x crop of a frosted fur hat shows jagged pixels with the first and distinct flakes with the second](images/vae_compare.jpg)
 
+**Community merge: [FineView](https://civitai.com/models/3045885/fineview-or-h3image).** This is a MiniMax-H3-Image merge with output heads taken from MiniMax H3 (the video model), so that they no longer depend on the 6-step grid. It loads here as MiniMax-H3-Image, with the same text encoders and VAEs. Its author recommends shift 5 at 8 steps (4.44 at 4 MP). This extension ignores the Shift slider, and **H3-Image 8-step** is practically the same curve, so use it with **Euler a**. H3-Image LCM with Simple also works and is softer. Do not use Simple at 8 steps with Euler or Euler a: on this grid it ends at sigma 0.17, and the pictures come out botched. In a one-seed test against the stock INT8 checkpoint on matched settings, FineView was clearly cleaner at 4 MP (2048×2048): with Euler a and with H3-Image LCM, the stock fur and beard came out scratchy and crunchy, and FineView's came out smooth. At 16 MP the difference was small, slightly softer fur with Euler a. Civitai lists it under the MiniMax H3 Community License.
+
 Not used here: the `qwen3.5_9b_w4a8_gptq` prompt enhancer (the model expects a detailed English description of the whole picture, so write one or expand the prompt elsewhere), and the `nvfp4_awq` text encoder, which this extension still refuses because it encoded prompts wrongly in Forge Neo when last tried.
 
 Its license is the MiniMax-H3-Image Community License, not MiniMax H3's: read it before commercial use.
