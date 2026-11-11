@@ -305,12 +305,16 @@ class Components:
     @property
     def experimental(self) -> str:
         """A pairing the models were not released with, in words for the console, the panel and the infotext; empty
-        for a released set. MiniMax-H3-Image with P-H3-Image's 4B text encoder: Pruna distilled that encoder (and its
-        text connector) to stand in for the H3 32B one in front of an H3 DiT, so the conditioning has the width and,
-        by reports, the meaning this checkpoint reads; the checkpoint itself was never trained on it."""
-        if self.dit.variant == H3_IMAGE and self.text_encoder.variant == PH3_IMAGE:
-            return "P-H3-Image text encoder"
-        return ""
+        for a released set. Both are MiniMax-H3-Image with a part of P-H3-Image. Its 4B text encoder: Pruna distilled
+        that encoder (and its text connector) to stand in for the H3 32B one in front of an H3 DiT, so the
+        conditioning has the width and, by reports, the meaning this checkpoint reads; the checkpoint itself was never
+        trained on it. Its VAE: the same H3 encoder and latent statistics with another single-frame decoder, so it
+        reads the same latents; users report finer detail from it."""
+        if self.dit.variant != H3_IMAGE:
+            return ""
+        parts = [label for variant, label in ((self.text_encoder.variant, "P-H3-Image text encoder"),
+                                              (self.vae.variant, "P-H3-Image VAE")) if variant == PH3_IMAGE]
+        return " + ".join(parts)
 
     @property
     def wants_int8_attention(self) -> bool:
@@ -345,11 +349,8 @@ def resolve_components(dit_path, module_paths):
             raise H3Error(f"Select the H3 {ROLE_LABELS[role]} in Forge's VAE / Text Encoder field.")
     components = Components(**resolved)
     if components.dit.variant == H3_IMAGE:
-        # the text encoder is the H3 32B one; P-H3-Image's 4B encoder is let through as an experiment
-        # (Components.experimental)
-        if components.vae.variant != H3_IMAGE:
-            raise H3Error("MiniMax-H3-Image needs its own VAE (minimax_h3_image_vae), whose 2D decoder makes one "
-                          "picture per latent: select it in place of the other VAE.")
+        # its own parts are the H3 32B text encoder and the MiniMax-H3-Image VAE; P-H3-Image's 4B encoder and its VAE
+        # are let through as experiments (Components.experimental). The video VAE was refused above.
         return components
     if components.vae.variant == H3_IMAGE:
         raise H3Error("The MiniMax-H3-Image VAE goes with the MiniMax-H3-Image checkpoint (minimax_h3_image): select "

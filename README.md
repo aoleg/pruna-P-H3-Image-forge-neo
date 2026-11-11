@@ -22,7 +22,7 @@ An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02
 ## What it does
 
 - **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 6 to 8 steps with no CFG, on schedules made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
-- **P-H3-Image's text encoder with MiniMax-H3-Image** (experimental): 3.6 to 9.1 GB in place of 27 GB, selected like any other text encoder.
+- **P-H3-Image's text encoder and VAE with MiniMax-H3-Image** (experimental): the text encoder takes 3.6 to 9.1 GB in place of 27 GB; the VAE has a different decoder. Select either like any other module.
 - **P-H3-Image text-to-image** at 8 MP in 8 steps, no CFG, with Pruna's own schedule: select the P-H3-Image checkpoint, text encoder and VAE, pick the `ph3` UI preset and generate.
 - **P-H3-Image edits** in img2img: the input image is `<Picture 1>`, the ImageStitch Integrated gallery holds up to 7 references, and the prompt names them.
 - **Forge's own machinery**: its loader, samplers, memory management, quantized formats (int8, w4a8, w6a8, fp8, GGUF) and LoRA handling. Nothing is installed into Forge's Python environment.
@@ -50,7 +50,9 @@ The checkpoint is the H3 DiT without the audio layers, with six output heads, on
 
 The checkpoint asks for comfy-kitchen's INT8 attention, which ComfyUI then uses; in Forge Neo that is the `--use-ck-attention` launch flag. Without it the model runs on Forge's default attention, slower and with more VRAM at these sizes.
 
-**Experimental:** P-H3-Image's much smaller text encoder (`p-h3-image_text_encoder_*`, 3.6 to 9.1 GB) is accepted in place of the 32B one. Pruna distilled it to stand in for the H3 encoder, and there are reports that MiniMax-H3-Image follows it, but the checkpoint was not trained with it. The console, the panel and the infotext mark such a generation as experimental. Sampling, sizes and the VAE stay MiniMax-H3-Image's.
+**Experimental:** P-H3-Image's much smaller text encoder (`p-h3-image_text_encoder_*`, 3.6 to 9.1 GB) is accepted in place of the 32B one. Pruna distilled it to stand in for the H3 encoder, and there are reports that MiniMax-H3-Image follows it, but the checkpoint was not trained with it. The console, the panel and the infotext mark such a generation as experimental. Sampling and sizes stay MiniMax-H3-Image's.
+
+**Experimental:** P-H3-Image's VAE (`p-h3-image_vae_*`) is accepted in place of `minimax_h3_image_vae_fp16`, with either text encoder. The two VAEs share the H3 encoder and latent statistics and differ only in the decoder, so the P-H3-Image VAE reads the checkpoint's latents as they are. Users report finer detail from it; it is not yet compared here. It is 3.1 GB in INT8 against 1.2 GB, and it is marked as experimental like the text encoder.
 
 Not used here: the `qwen3.5_9b_w4a8_gptq` prompt enhancer (the model expects a detailed English description of the whole picture, so write one or expand the prompt elsewhere), and the `nvfp4_awq` text encoder, which this extension still refuses because it encoded prompts wrongly in Forge Neo when last tried.
 
@@ -129,7 +131,7 @@ MiniMax's reference recipe, Simple at 6 steps, against Simple at 8 steps and the
 
 ![Simple at 6 steps leaves speckle on the face and the wall, Simple at 8 steps leaves grit, P-H3-Image is clean](images/minimax_reference.jpg)
 
-Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe stays one schedule and step count away. Why its last step fails here is not known: the port matches MiniMax's pipeline piece by piece, and the cause may be the model, its INT8 file or the port. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
+Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe stays one schedule and step count away. The failure is not this port's: MiniMax's own ComfyUI workflow, run in SwarmUI, gives the same speckle, and MiniMax's diffusers scheduler takes an Euler step as well. Whether the cause is the model or its INT8 file is not known. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
 
 ## Editing
 

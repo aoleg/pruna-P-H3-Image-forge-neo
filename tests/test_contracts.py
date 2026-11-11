@@ -162,9 +162,15 @@ class HeaderTests(unittest.TestCase):
         mixed = resolve_components(dit, [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), vae])
         self.assertEqual((mixed.profile.name, mixed.text_encoder.variant, mixed.experimental),
                          ("h3image", "ph3-image", "P-H3-Image text encoder"))
-        # its VAE stays its own, and goes with no other checkpoint
-        with self.assertRaisesRegex(H3Error, "MiniMax-H3-Image needs its own VAE"):
-            resolve_components(dit, [te, checkpoint(self.root / "other.safetensors", PH3_VAE)])
+        # experimental too: P-H3-Image's VAE (the same H3 encoder and latents, another single-frame decoder), alone or
+        # with that text encoder; the recipe stays the checkpoint's
+        ph3_vae = checkpoint(self.root / "other.safetensors", PH3_VAE)
+        with_vae = resolve_components(dit, [te, ph3_vae])
+        self.assertEqual((with_vae.profile.name, with_vae.vae.variant, with_vae.experimental),
+                         ("h3image", "ph3-image", "P-H3-Image VAE"))
+        both = resolve_components(dit, [ph3[0], ph3_vae])
+        self.assertEqual((both.profile.name, both.experimental), ("h3image", "P-H3-Image text encoder + P-H3-Image VAE"))
+        # MiniMax-H3-Image's own VAE still goes with no other checkpoint
         with self.assertRaisesRegex(H3Error, "is the H3 video VAE"):
             resolve_components(dit, [te, checkpoint(self.root / "video.safetensors", VAE)])
         with self.assertRaisesRegex(H3Error, "goes with the MiniMax-H3-Image checkpoint"):
