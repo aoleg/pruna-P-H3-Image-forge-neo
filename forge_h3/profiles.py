@@ -44,11 +44,16 @@ H3 = Profile(name="h3", label="MiniMax H3", sampler="Euler", scheduler="Simple",
 PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0, shift=1.0,
                     size=2912, text_encoder="ph3-image", vae="ph3-image", max_pictures=8, edit_prefix=True)
 # MiniMax's own MiniMax-H3-Image: the H3 DiT without the audio stream, six output heads distilled on the checkpoint's
-# sigma grid (so 6 steps, no CFG, and Simple lands on the grid), the H3 32B text encoder and a 2D image VAE; about
-# 4 to 20 MP, best around 16 MP
-H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler="Simple", steps=6, cfg=1.0, shift=1.0,
-                   size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,
+# sigma grid, the H3 32B text encoder and a 2D image VAE; no CFG, about 4 to 20 MP, best around 16 MP.
+# MiniMax's reference recipe is Euler, Simple, 6 steps (Simple lands on the checkpoint's grid). The default here is
+# the owner's pick after same-seed tests on an RTX 5090: Pruna's sigma grid at 8 steps, which stays above sigma 0.53
+# and takes the last step from there, came out clean where the reference's two low-noise steps left speckle. The
+# reference recipe stays one schedule and step count away.
+H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler=PH3_IMAGE_SCHEDULER, steps=8, cfg=1.0,
+                   shift=1.0, size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,
                    picture_label=H3_IMAGE_PICTURE_LABEL, shift_used=False)
+# MiniMax's reference recipe for it, for the panel and the documentation
+H3_IMAGE_REFERENCE = ("Euler", "Simple", 6)
 
 ALL = (H3, PH3_IMAGE, H3_IMAGE)
 # the audio-video checkpoints share one layout: the text encoder tells P-H3-Image from H3

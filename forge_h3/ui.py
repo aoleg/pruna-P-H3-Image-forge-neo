@@ -8,7 +8,7 @@ import gradio as gr
 from .contracts import H3Error
 from .integration import checkpoint_info
 from .models import ROLE_LABELS, inspect_model
-from .profiles import H3
+from .profiles import H3, H3_IMAGE, H3_IMAGE_REFERENCE
 
 COMPONENTS = {}
 NATIVE_CONTROLS = ("sampling", "scheduler", "cfg_scale")
@@ -138,8 +138,12 @@ class Panel:
                 status = html.escape(error)
             elif profile is not None:
                 shift = f"Shift {profile.shift:g}, " if profile.shift_used else ""
-                status = (f"{profile.label} makes one still image per generation: {profile.steps} steps, CFG {profile.cfg:g}, "
-                          f"{shift}best at about {profile.size}x{profile.size} (the {profile.name} UI preset).")
+                status = (f"{profile.label} makes one still image per generation: {profile.sampler}, {profile.scheduler}, "
+                          f"{profile.steps} steps, CFG {profile.cfg:g}, {shift}best at about {profile.size}x{profile.size} "
+                          f"(the {profile.name} UI preset).")
+                if profile is H3_IMAGE:
+                    sampler, scheduler, steps = H3_IMAGE_REFERENCE
+                    status += f" MiniMax's reference recipe is {sampler}, {scheduler}, {steps} steps."
             else:
                 status = "H3 makes one still image per generation."
             return ([gr.update(visible=active), status, summary, saved] + updates

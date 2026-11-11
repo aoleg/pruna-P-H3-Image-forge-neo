@@ -30,7 +30,10 @@ class ProfileTests(unittest.TestCase):
         self.assertIs(for_components("h3", "h3"), H3)
         self.assertIs(for_components("h3", "ph3-image"), PH3_IMAGE)
         self.assertEqual((H3_IMAGE.steps, H3_IMAGE.cfg, H3_IMAGE.picture_label, H3_IMAGE.edit_prefix, H3_IMAGE.shift_used),
-                         (6, 1.0, "Picture %d: ", False, False))
+                         (8, 1.0, "Picture %d: ", False, False))
+        # the default is Pruna's grid at 8 steps; MiniMax's own recipe is kept as the documented alternative
+        from forge_h3.profiles import H3_IMAGE_REFERENCE, PH3_IMAGE_SCHEDULER
+        self.assertEqual((H3_IMAGE.sampler, H3_IMAGE.scheduler, H3_IMAGE_REFERENCE), ("Euler", PH3_IMAGE_SCHEDULER, ("Euler", "Simple", 6)))
         self.assertEqual((PH3_IMAGE.picture_label, PH3_IMAGE.edit_prefix, PH3_IMAGE.max_pictures, H3.max_pictures),
                          ("<Picture %d>: ", True, 8, 0))
 
