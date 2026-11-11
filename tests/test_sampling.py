@@ -64,6 +64,15 @@ class GridPredictorTests(unittest.TestCase):
         self.assertEqual((self.predictor.percent_to_sigma(0.0), self.predictor.percent_to_sigma(1.0)), (1.0, 0.0))
         self.assertAlmostEqual(self.predictor.percent_to_sigma(0.5), 0.75, places=6)
 
+    def test_a_point_just_inside_an_end_stays_inside(self):
+        # ER SDE replaces a first sigma of 1 with percent_to_sigma(1e-4): it must come back below 1, or its log-SNR is
+        # infinite and the sampler makes NaN
+        near_top = self.predictor.percent_to_sigma(1e-4)
+        self.assertLess(near_top, 1.0)
+        self.assertGreater(near_top, GRID[1])
+        self.assertTrue(bool(torch.isfinite(torch.tensor(near_top).logit())))
+        self.assertGreater(self.predictor.percent_to_sigma(1.0 - 1e-4), 0.0)
+
     def test_the_smallest_sigma_is_above_zero(self):
         # Normal steps down to sigma_min before its closing 0, and a zero there divides by zero in the sampler
         sigmas = self.predictor.sigmas
