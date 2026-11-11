@@ -26,12 +26,16 @@ H3_IMAGE_TAIL = 0.42
 H3_IMAGE_8_STEP = "H3-Image 8-step"
 H3_IMAGE_CURVE_END = 1.0 / 8.0
 H3_IMAGE_CURVE_SHIFT = H3_IMAGE_TAIL * (1.0 / H3_IMAGE_CURVE_END - 1.0) / (1.0 - H3_IMAGE_TAIL)
+# "H3-Image 8-step softer": the same eight steps with a slower start, each of the first seven sigmas halfway between
+# the 8-step curve and Pruna's grid (the list as tested). The first steps decide how smooth the picture is: with Heun
+# it measures between the two on sharpness, fine grain and dark specks; the last sigma barely matters.
+H3_IMAGE_8_STEP_SOFTER = "H3-Image 8-step softer"
+H3_IMAGE_8_STEP_SOFTER_SIGMAS = (1.0, 0.9787, 0.9531, 0.923, 0.8803, 0.8172, 0.7192, H3_IMAGE_TAIL)
 # "H3-Image 6-step": the checkpoint's grid as MiniMax made it, with the last point lifted from 0.232 to the tail
 H3_IMAGE_6_STEP = "H3-Image 6-step"
 H3_IMAGE_6_STEP_SIGMAS = H3_IMAGE_PDD_SIGMAS[:5] + (H3_IMAGE_TAIL,)
-# "H3-Image 5-step": the grid without its last point; the fastest, with a little more grain
-H3_IMAGE_5_STEP = "H3-Image 5-step"
-H3_IMAGE_5_STEP_SIGMAS = H3_IMAGE_PDD_SIGMAS[:5]
+# (the grid without its last point, 5 steps ending at 0.53, also runs clean but with about a fifth more fine grain;
+# it was a schedule in 0.10.0 and is left out)
 
 
 @dataclass(frozen=True)
@@ -118,18 +122,18 @@ def h3_image_8_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **
     return torch.cat([sigmas, sigmas.new_zeros(1)]).to(dtype=torch.float32, device=device)
 
 
+def h3_image_8_step_softer_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
+    return resample(H3_IMAGE_8_STEP_SOFTER_SIGMAS, n, device)
+
+
 def h3_image_6_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
     return resample(H3_IMAGE_6_STEP_SIGMAS, n, device)
-
-
-def h3_image_5_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **kwargs):
-    return resample(H3_IMAGE_5_STEP_SIGMAS, n, device)
 
 
 # Forge schedules: (name, label, function)
 SCHEDULERS = (
     ("ph3_image", PH3_IMAGE_SCHEDULER, ph3_image_sigmas),
     ("h3_image_8", H3_IMAGE_8_STEP, h3_image_8_step_sigmas),
+    ("h3_image_8_softer", H3_IMAGE_8_STEP_SOFTER, h3_image_8_step_softer_sigmas),
     ("h3_image_6", H3_IMAGE_6_STEP, h3_image_6_step_sigmas),
-    ("h3_image_5", H3_IMAGE_5_STEP, h3_image_5_step_sigmas),
 )

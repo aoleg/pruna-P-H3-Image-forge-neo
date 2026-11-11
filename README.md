@@ -1,21 +1,28 @@
-# MiniMax-H3-Image and P-H3-Image for Forge Neo
+# MiniMax-H3-Image for Forge Neo
 
 [![Forge Neo](https://img.shields.io/badge/Forge-Neo-blue)](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo)
-![Status](https://img.shields.io/badge/Status-P--H3--Image_tested-brightgreen)
+![Status](https://img.shields.io/badge/Status-MiniMax--H3--Image_tested-brightgreen)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
 
-An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) that runs the MiniMax H3 architecture as a **still-image model**: MiniMax's own [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) and Pruna's [P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy) for text-to-image and editing, with the checkpoint selector, presets and Generate button you already know.
+An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) that runs MiniMax's [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) for text-to-image and editing, with the checkpoint selector, presets and Generate button you already know. It also runs Pruna's [P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy), which this extension was first written for, and accepts P-H3-Image's small text encoder in place of MiniMax's 32B one.
 
 > [!Note]
-> **A personal note and recommendation, after testing P-H3-Image generation and editing on an RTX 5090.** P-H3-Image is much better as an **edit-and-upscale** model than as a text-to-image model. It is a very good image restoration and upscaling model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds. Text-to-image is rather meh, because small details come out soft. Give it a picture to work from.
+> **A personal note and recommendation, after testing both models on an RTX 5090.** MiniMax-H3-Image supersedes P-H3-Image. With the same prompt, seeds and text encoder, MiniMax-H3-Image wrote the requested numbers correctly in every picture, followed the described poses more closely and gave less fine grain. P-H3-Image dropped or misspelled a number in 5 of 16 pictures and added more garbled signs.
 >
-> **MiniMax-H3-Image** runs; see [Settings](#settings) for the schedules I use instead of MiniMax's own. **Still untested:** its edit mode and 16 MP, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+> **The part of P-H3-Image that is still worth having is its text encoder.** At 5 GB in INT8 against 27 GB, it stands in for the 32B H3 encoder, and MiniMax-H3-Image follows it well. All my MiniMax-H3-Image tests used it. It is marked experimental because MiniMax did not train the checkpoint with it.
+>
+> P-H3-Image stays supported. It is still a good **edit-and-upscale** model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds.
+>
+> See [Settings](#settings) for the MiniMax-H3-Image schedules I use instead of MiniMax's own. **Still untested:** MiniMax-H3-Image's edit mode and 16 MP, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+>
+> The repository keeps its old name for now.
 >
 > This is a fork of [minimax-h3-forge-neo](https://github.com/eduardoabreu81/minimax-h3-forge-neo) with everything video and audio removed: no clips, no sound, no FFmpeg, no keyframes, guides or motion control. The extension needs an up-to-date **Forge Neo** (the `neo` branch, with comfy-kitchen 0.2.37 or later). On an older version it stays disabled and tells you so in the console; Forge Neo itself keeps working as usual.
 
 ## What it does
 
-- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 5 to 8 steps with no CFG, on schedules made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
+- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 6 to 8 steps with no CFG, on schedules made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
+- **P-H3-Image's text encoder with MiniMax-H3-Image** (experimental): 3.6 to 9.1 GB in place of 27 GB, selected like any other text encoder.
 - **P-H3-Image text-to-image** at 8 MP in 8 steps, no CFG, with Pruna's own schedule: select the P-H3-Image checkpoint, text encoder and VAE, pick the `ph3` UI preset and generate.
 - **P-H3-Image edits** in img2img: the input image is `<Picture 1>`, the ImageStitch Integrated gallery holds up to 7 references, and the prompt names them.
 - **Forge's own machinery**: its loader, samplers, memory management, quantized formats (int8, w4a8, w6a8, fp8, GGUF) and LoRA handling. Nothing is installed into Forge's Python environment.
@@ -87,8 +94,12 @@ MiniMax-H3-Image has three schedules of its own, each named for the step count i
 | Schedule | Steps | What it is | Result |
 | --- | ---: | --- | --- |
 | **H3-Image 8-step** | 8 | a shifted flow curve from sigma 1 to 0.42, then 0 | the default, and the crispest |
+| **H3-Image 8-step softer** | 8 | the same 0.42 end with a slower start: each sigma halfway between the 8-step curve and Pruna's grid | smoother skin and fewer dark specks, faces still defined |
 | **H3-Image 6-step** | 6 | MiniMax's own six-point grid with its last point lifted from 0.232 to 0.42 | clean, three quarters of the time |
-| **H3-Image 5-step** | 5 | MiniMax's grid without its last point (it ends at 0.53) | the fastest, with a little more grain |
+
+The first sigmas decide how smooth the picture is, and the last one barely matters. From crisp to smooth, the order is H3-Image 8-step, H3-Image 8-step softer, then the P-H3-Image schedule. The three give different compositions on the same seed.
+
+**Heun** at 8 steps (15 model evaluations against Euler's 8) gives sharper faces than Euler on all three, with more small dark specks that look like dust on a scanned slide. Euler stays the default because it is twice as fast.
 
 Each runs at any other step count too: the list is resampled between its two fixed ends, so 10 or 12 steps of the 8-step schedule sample the same curve more finely and never go below its last sigma. More steps are different, not better: 12 steps gave more skin texture and blemishes than 8. The step count also changes the composition, because the first sigmas choose it.
 
@@ -97,8 +108,8 @@ These schedules are a personal pick from same-seed tests on an RTX 5090 (Euler, 
 | Last sigma before 0 | Schedules that end there | Picture |
 | --- | --- | --- |
 | 0.76 and up | Krea 2 Reference, Flux2 (at this size) | under-denoised, down to a blur |
-| 0.53 | P-H3-Image, H3-Image 5-step | clean, smoother |
-| 0.27 to 0.42 | H3-Image 8-step and 6-step, Linear Quadratic, Qwen Image 2.1 Turbo | clean and crisp, nearly the same picture across the range |
+| 0.53 | P-H3-Image, MiniMax's grid without its last point (5 steps) | clean, smoother, a little more grain |
+| 0.27 to 0.42 | the three H3-Image schedules, Linear Quadratic, Qwen Image 2.1 Turbo | clean and crisp, nearly the same picture across the range |
 | 0.232 | Simple at 6 steps, which is **MiniMax's reference recipe** | speckle |
 | below 0.2 | Simple, SGM Uniform, Beta, Bong Tangent and Normal at 8 steps | gritty: leathery skin, noise in flat areas |
 
