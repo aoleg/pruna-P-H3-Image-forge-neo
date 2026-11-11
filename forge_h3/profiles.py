@@ -70,8 +70,8 @@ PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=P
 # MiniMax's own MiniMax-H3-Image: the H3 DiT without the audio stream, six output heads distilled on the checkpoint's
 # sigma grid, the H3 32B text encoder and a 2D image VAE; no CFG, about 4 to 20 MP, best around 16 MP.
 # MiniMax's reference recipe is Euler, Simple, 6 steps (Simple lands on the checkpoint's grid); its last step, at sigma
-# 0.232, leaves speckle, in ComfyUI too. The default keeps the grid and swaps the sampler: LCM noises each clean
-# estimate afresh, and the same six sigmas come out clean (sampler.py). The H3-Image schedules above are for Euler and
+# 0.232, leaves speckle below about 16 MP, in ComfyUI too, and is clean at 16 MP. The default keeps the grid and swaps
+# the sampler: LCM noises each clean estimate afresh, and the same six sigmas come out clean at any size (sampler.py). The H3-Image schedules above are for Euler and
 # Heun, which need a last sigma of 0.27 or more.
 H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler=SAMPLER, scheduler="Simple", steps=6, cfg=1.0,
                    shift=1.0, size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,

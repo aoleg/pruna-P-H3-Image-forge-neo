@@ -3,9 +3,9 @@
 Each step takes the model's clean estimate and noises it afresh to the next sigma, as Forge's LCM does; the fresh noise
 is scaled from S_NOISE_START at the first step to S_NOISE_END at the last, as ComfyUI's SamplerLCM does with s_noise and
 s_noise_end. On MiniMax-H3-Image this is what removes the speckle and grit that Euler and Heun leave at the checkpoint's
-own last sigmas: Euler carries the model's own noise estimate into the next step, and the low-sigma output heads turn
-it into speckle, while fresh noise is what they were distilled on. 1.10 to 0.90 is the community workflow's setting
-(Simple, 6 steps).
+own last sigmas below about 16 MP (at 16 MP Euler is clean too): Euler carries the model's own noise estimate into the
+next step, and the low-sigma output heads turn it into speckle, while fresh noise is what they were distilled on. 1.10
+to 0.90 is the community workflow's setting (Simple, 6 steps).
 """
 
 import torch
