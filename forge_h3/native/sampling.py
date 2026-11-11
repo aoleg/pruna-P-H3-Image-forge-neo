@@ -20,7 +20,24 @@ class PredictionH3Image(PredictionDiscreteFlow):
         # the grid decreases from 1 to 0; kept ascending so index 0 is sigma 0. Set before the base class builds its
         # sigma table through sigma()
         object.__setattr__(self, "_grid", tuple(float(s) for s in reversed(tuple(grid))))
+        # the checkpoint's own grid; _grid is this grid moved by the [H3] Resolution shift
+        object.__setattr__(self, "_stock_grid", self._grid)
+        object.__setattr__(self, "odds_factor", 1.0)
         super().__init__(model_config)
+
+    def set_odds_factor(self, factor: float) -> None:
+        """Move the grid by the [H3] Resolution shift (resolution_shift.odds_factor) and rebuild the sigma table, so
+        Forge's schedules land on the moved grid as they land on the stock one."""
+        from ..resolution_shift import shift_sigma
+        factor = float(factor)
+        object.__setattr__(self, "odds_factor", factor)
+        object.__setattr__(self, "_grid", tuple(shift_sigma(s, factor) for s in self._stock_grid))
+        self.set_parameters()
+
+    @property
+    def grid(self) -> list[float]:
+        """The grid the heads are picked on, decreasing from 1 to 0 (the stock grid moved by the odds factor)."""
+        return list(reversed(self._grid))
 
     def _sigma(self, timestep, snap):
         timestep = torch.as_tensor(timestep, dtype=torch.float32)

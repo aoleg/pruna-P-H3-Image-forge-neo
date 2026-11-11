@@ -75,6 +75,12 @@ def settings():
                                              {"choices": list(integration.OUTPUT_SCALES)}, section=section)
                            .info("shrinks the decoded picture with an exact area filter, for less pixel-level "
                                  "grit; from 16 MP, 3/4 gives 9 MP, 2/3 gives 7 MP, 1/2 gives 4 MP"))
+    shared.opts.add_option(integration.RESOLUTION_SHIFT_SETTING,
+                           shared.OptionInfo(0.0, "[H3] Resolution shift", gr.Slider,
+                                             {"minimum": 0.0, "maximum": 1.0, "step": 0.05}, section=section)
+                           .info("experimental, MiniMax-H3-Image only: moves its sigma grid with the picture size, "
+                                 "lower below 16 MP and higher above, as Krea 2 and Flux move their shift; 0 keeps "
+                                 "MiniMax's fixed grid, 0.5 is SD3's rule (at 4 MP the shift halves)"))
 
 
 script_callbacks.on_ui_settings(settings)

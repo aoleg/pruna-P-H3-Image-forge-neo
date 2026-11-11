@@ -77,7 +77,8 @@ def register_scheduler() -> None:
     for name, label, function in SCHEDULERS:
         if any(s.label == label for s in sd_schedulers.all_schedulers):
             continue
-        scheduler = sd_schedulers.Scheduler(name, label, function)
+        # the model's schedule linker, for the [H3] Resolution shift (profiles.follow_grid)
+        scheduler = sd_schedulers.Scheduler(name, label, function, need_inner_model=True)
         sd_schedulers.all_schedulers.append(scheduler)
         if scheduler.label not in hidden:
             sd_schedulers.schedulers.append(scheduler)

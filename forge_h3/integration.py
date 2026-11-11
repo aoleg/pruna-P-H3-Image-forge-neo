@@ -10,6 +10,7 @@ from pathlib import Path
 from . import pictures
 from .contracts import GenerationRequest, H3Error, set_pending_error
 from .models import inspect_model, resolve_components
+from .resolution_shift import odds_factor
 
 # StableDiffusionProcessing.distilled_cfg_scale when a request does not set it
 API_DEFAULT_DISTILLED_CFG = 3.5
@@ -85,6 +86,7 @@ def script_before_process(p):
 
 REFERENCE_SETTING = "h3_do_reference"
 OUTPUT_SCALE_SETTING = "h3_output_scale"
+RESOLUTION_SHIFT_SETTING = "h3_resolution_shift"
 # the setting's choices and the fraction of each side that is kept
 OUTPUT_SCALES = {"1": Fraction(1), "3/4": Fraction(3, 4), "2/3": Fraction(2, 3), "1/2": Fraction(1, 2),
                  "1/4": Fraction(1, 4)}
@@ -102,6 +104,16 @@ def output_scale() -> tuple[str, Fraction]:
     from modules import shared
     label = str(getattr(shared.opts, OUTPUT_SCALE_SETTING, "1"))
     return (label, OUTPUT_SCALES[label]) if label in OUTPUT_SCALES else ("1", Fraction(1))
+
+
+def resolution_shift() -> float:
+    """The [H3] Resolution shift setting: the strength of the grid's move with picture size, 0 (off) to 1."""
+    from modules import shared
+    try:
+        strength = float(getattr(shared.opts, RESOLUTION_SHIFT_SETTING, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(max(strength, 0.0), 1.0)
 
 
 def validate_img2img(p, components, reference):
@@ -200,6 +212,10 @@ def process(p):
     engine.set_output_scale(scale)
     if scale < 1:
         p.extra_generation_params["H3 Output scale"] = scale_label
+    strength = resolution_shift()
+    factor = odds_factor(p.width, p.height, strength)
+    if engine.set_resolution_shift(factor) and strength > 0:
+        p.extra_generation_params["H3 Resolution shift"] = f"{strength:g} (x{factor:.2f})"
     if request.references:
         p.extra_generation_params["H3 Edit pictures"] = request.references
 

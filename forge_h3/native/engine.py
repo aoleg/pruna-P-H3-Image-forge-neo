@@ -160,6 +160,18 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         2731)."""
         self.output_scale = min(Fraction(scale), Fraction(1))
 
+    def set_resolution_shift(self, factor: float) -> bool:
+        """Called by the script for every generation, before Forge makes the schedule: move MiniMax-H3-Image's sigma
+        grid by an odds factor (resolution_shift.odds_factor, 1 for the stock grid), both for the schedule and for
+        picking the output heads, so each head still runs at its own step. Returns whether the model has the grid."""
+        # sampling.PredictionH3Image, the only predictor with a grid to move
+        predictor = getattr(self.forge_objects.unet.model, "predictor", None)
+        if not hasattr(predictor, "set_odds_factor"):
+            return False
+        predictor.set_odds_factor(factor)
+        self.forge_objects.unet.model.diffusion_model.pdd_sigmas = predictor.grid
+        return True
+
     def condition_images(self) -> list[torch.Tensor]:
         """The pictures the text encoder sees before the prompt as "<Picture i>" (ComfyUI's vision copies)."""
         return list(getattr(self, "vision_pictures", ()))

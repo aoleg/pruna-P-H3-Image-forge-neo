@@ -1,7 +1,9 @@
 """The kinds of still-image H3 model, their sampling recipes and their schedules. Torch only, so CPU tests cover it."""
 
+import functools
 from dataclasses import dataclass
 
+from .resolution_shift import shift_sigmas
 from .sampler import SAMPLER
 
 # the ManualSigmas grid of Pruna's workflows: 8 Euler steps at shift 1, no CFG
@@ -134,10 +136,21 @@ def h3_image_6_step_sigmas(n: int, sigma_min=0.0, sigma_max=1.0, device=None, **
     return resample(H3_IMAGE_6_STEP_SIGMAS, n, device)
 
 
-# Forge schedules: (name, label, function)
+def follow_grid(function):
+    """A schedule of fixed sigmas that moves with the [H3] Resolution shift: Forge passes the model's schedule linker
+    (inner_model) to a schedule that asks for it, and when its predictor has moved MiniMax-H3-Image's grid by an odds
+    factor, every sigma moves by the same factor. Other predictors have no factor and keep the list as it is."""
+    @functools.wraps(function)
+    def schedule(n, *args, inner_model=None, **kwargs):
+        factor = getattr(getattr(inner_model, "predictor", None), "odds_factor", 1.0)
+        return shift_sigmas(function(n, *args, **kwargs), float(factor))
+    return schedule
+
+
+# Forge schedules: (name, label, function); each follows the [H3] Resolution shift
 SCHEDULERS = (
-    ("ph3_image", PH3_IMAGE_SCHEDULER, ph3_image_sigmas),
-    ("h3_image_8", H3_IMAGE_8_STEP, h3_image_8_step_sigmas),
-    ("h3_image_8_softer", H3_IMAGE_8_STEP_SOFTER, h3_image_8_step_softer_sigmas),
-    ("h3_image_6", H3_IMAGE_6_STEP, h3_image_6_step_sigmas),
+    ("ph3_image", PH3_IMAGE_SCHEDULER, follow_grid(ph3_image_sigmas)),
+    ("h3_image_8", H3_IMAGE_8_STEP, follow_grid(h3_image_8_step_sigmas)),
+    ("h3_image_8_softer", H3_IMAGE_8_STEP_SOFTER, follow_grid(h3_image_8_step_softer_sigmas)),
+    ("h3_image_6", H3_IMAGE_6_STEP, follow_grid(h3_image_6_step_sigmas)),
 )

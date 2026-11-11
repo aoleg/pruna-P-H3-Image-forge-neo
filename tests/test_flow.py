@@ -475,6 +475,32 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn("H3 Output scale", p.extra_generation_params)
         integration.postprocess(p, None)
 
+    def test_resolution_shift_moves_the_grid_of_the_schedule_and_the_heads(self):
+        model = self.engine.forge_objects.unet.model
+        moved = []
+        model.predictor = types.SimpleNamespace(set_odds_factor=moved.append, grid=[1.0, 0.5, 0.0])
+        sys.modules["modules.shared"].opts.h3_resolution_shift = 0.5
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        factor = ((WIDTH // 32) * (HEIGHT // 32) / 16384) ** 0.5
+        self.assertAlmostEqual(moved[-1], factor)
+        self.assertEqual(model.diffusion_model.pdd_sigmas, [1.0, 0.5, 0.0])
+        self.assertEqual(p.extra_generation_params["H3 Resolution shift"], f"0.5 (x{factor:.2f})")
+        integration.postprocess(p, None)
+        # 0 puts the stock grid back and leaves no infotext; a model without the grid gets neither
+        sys.modules["modules.shared"].opts.h3_resolution_shift = 0
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        self.assertEqual(moved[-1], 1.0)
+        self.assertNotIn("H3 Resolution shift", p.extra_generation_params)
+        integration.postprocess(p, None)
+        del model.predictor
+        sys.modules["modules.shared"].opts.h3_resolution_shift = 0.5
+        p = Txt2Img()
+        self.run_until_sampling(p)
+        self.assertNotIn("H3 Resolution shift", p.extra_generation_params)
+        integration.postprocess(p, None)
+
     def test_a_batch_of_pictures_needs_batch_count(self):
         p = Txt2Img()
         p.batch_size = 2

@@ -64,6 +64,17 @@ class GridPredictorTests(unittest.TestCase):
         self.assertEqual((self.predictor.percent_to_sigma(0.0), self.predictor.percent_to_sigma(1.0)), (1.0, 0.0))
         self.assertAlmostEqual(self.predictor.percent_to_sigma(0.5), 0.75, places=6)
 
+    def test_the_resolution_shift_moves_the_grid_and_simple_follows_it(self):
+        self.predictor.set_odds_factor(0.5)
+        moved = [s if s in (0.0, 1.0) else 0.5 * s / (1.0 - 0.5 * s) for s in GRID]
+        self.assertEqual(self.predictor.odds_factor, 0.5)
+        torch.testing.assert_close(torch.tensor(self.predictor.grid), torch.tensor(moved), rtol=0, atol=1e-7)
+        torch.testing.assert_close(torch.tensor(simple(6, self.predictor.sigmas)), torch.tensor(moved), rtol=0, atol=1e-6)
+        # factor 1 is the checkpoint's grid again
+        self.predictor.set_odds_factor(1.0)
+        torch.testing.assert_close(torch.tensor(simple(6, self.predictor.sigmas)), torch.tensor(GRID), rtol=0, atol=1e-7)
+        self.assertEqual(self.predictor.grid, list(GRID))
+
     def test_a_point_just_inside_an_end_stays_inside(self):
         # ER SDE replaces a first sigma of 1 with percent_to_sigma(1e-4): it must come back below 1, or its log-SNR is
         # infinite and the sampler makes NaN

@@ -183,6 +183,18 @@ MiniMax's reference recipe, Simple at 6 steps, against Simple at 8 steps and the
 
 Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe is one sampler away. The failure is not this port's: MiniMax's own ComfyUI workflow, run in SwarmUI, gives the same speckle, and MiniMax's diffusers scheduler takes an Euler step as well. It comes from Euler below 16 MP: LCM on the same sigmas is clean at any size, and so is Euler at 16 MP. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
 
+### Resolution shift (experimental)
+
+MiniMax's six-point grid is a shifted flow curve: logit(σ) = ln 3 + 1.42·logit(t), within 0.02, so it is shift 3 with a steeper slope, used at every picture size. Krea 2, Flux and SD3 lower their shift for smaller pictures. **Settings → MiniMax H3 → [H3] Resolution shift** does the same for MiniMax-H3-Image: it multiplies the odds σ/(1 − σ) of each grid sigma by (tokens / tokens at 16 MP) ^ strength, where one token is 32×32 pixels. At 16 MP nothing changes. Below 16 MP every sigma drops, and above 16 MP every sigma rises. Strength 0.5 is SD3's rule, which halves the shift at 4 MP, and 0 (the default) keeps MiniMax's fixed grid.
+
+| Strength | Factor at 4 MP | Grid at 4 MP (2048×2048) |
+| --- | ---: | --- |
+| 0 | ×1 | 0.968, 0.888, 0.750, 0.533, 0.232 |
+| 0.25 | ×0.71 | 0.955, 0.848, 0.680, 0.446, 0.176 |
+| 0.5 | ×0.50 | 0.937, 0.798, 0.600, 0.363, 0.131 |
+
+Forge's schedules land on the moved grid as they land on the stock one, so Simple at 6 steps gives the six moved sigmas, and each output head still runs at its own step. The four H3 schedules move by the same factor. The infotext records the setting as "H3 Resolution shift". It has not been tested on a GPU yet. The moved grid ends lower, which plain Euler turns into grit, so try it with H3-Image LCM or Euler a. The [FineView](#minimax-h3-image) merge moves its shift with resolution as well, from 5 to 4.44 at 4 MP.
+
 ### Output scale
 
 The H3 VAEs decode each latent position into a 16×16 block of pixels, twice the side of most image models' VAEs, so much of the finest texture is invented by the decoder and can look gritty or "upscaled" at 100%. **Settings → MiniMax H3 → [H3] Output scale** shrinks each side of the decoded picture to **3/4**, **2/3**, **1/2** or **1/4** with an exact area filter before Forge saves it: each output pixel is the mean of the source area it covers. From a 16 MP picture (4096×4096), 3/4 gives 9.4 MP (3072×3072), 2/3 gives 7.5 MP (2731×2731) and 1/2 gives 4.2 MP (2048×2048). 1/2 is the cleanest and crispest per pixel; 3/4 and 2/3 also clear the decoder's cross-hatched texture and keep more pixels, a little softer per pixel. A side that does not divide is rounded to the nearest pixel, which shifts the aspect ratio by less than 0.05%. The infotext records the setting; its Size stays the generated size. The setting averages away the decoder's pixel-level texture but not the sampler's speckle or clumping, which are larger than a pixel: for those, use H3-Image LCM or Euler a.
