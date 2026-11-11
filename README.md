@@ -112,6 +112,19 @@ LCM pictures are softer and lower in contrast than Heun's. Heun is crisper, but 
 
 ![Heun on H3-Image 8-step against LCM on Simple at 6 steps in a softly lit room: dark specks on the bright window with Heun, none with LCM](images/lcm_heun.jpg)
 
+### Other samplers
+
+Samplers that add fresh noise at each step also avoid most of Euler's speckle, each with its own look. Tested on the street scene with two seeds at 3648×2432:
+
+| Use | Sampler, schedule | Look |
+| --- | --- | --- |
+| Default | **H3-Image LCM**, Simple, 6 steps | natural, clean, the fastest |
+| A little crisper | **Euler a**, H3-Image 8-step, 8 steps | clean and natural, crisper faces, text as reliable |
+| Vivid | **ER SDE**, any schedule | saturated and the sharpest, but over-processed: haloed reflections, warped background faces, more text mistakes |
+| Crisp | **Heun**, an H3-Image schedule | crisp, with dark dust specks in bright areas; 15 evaluations |
+
+Euler a on Simple at 6 steps left faint pale blotches in a bright window on one picture of the room scene; on H3-Image 8-step none were seen. DPM++ SDE, DPM++ 2M SDE and DPM++ 3M SDE run (they gave NaN before 0.12.1) but are not compared here.
+
 ### The H3-Image schedules, for Euler and Heun
 
 For Euler and Heun, MiniMax-H3-Image has three schedules of its own, each named for the step count it was tuned at. Each ends at sigma 0.42, above the range where those samplers fail:
