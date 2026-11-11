@@ -73,8 +73,8 @@ def settings():
     shared.opts.add_option(integration.OUTPUT_SCALE_SETTING,
                            shared.OptionInfo("1", "[H3] Output scale", gr.Radio,
                                              {"choices": list(integration.OUTPUT_SCALES)}, section=section)
-                           .info("shrinks the decoded picture with an area filter, for less pixel-level grit; "
-                                 "1/2 of a 16 MP picture is 4 MP"))
+                           .info("shrinks the decoded picture with an exact area filter, for less pixel-level "
+                                 "grit; from 16 MP, 3/4 gives 9 MP, 2/3 gives 7 MP, 1/2 gives 4 MP"))
 
 
 script_callbacks.on_ui_settings(settings)

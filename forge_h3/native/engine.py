@@ -6,6 +6,8 @@ generation with prepare(), which returns the packed shape; the transformer unpac
 decodes the video latent and hands Forge the picture. The audio stub is sampled with the picture and never decoded.
 """
 
+from fractions import Fraction
+
 import torch
 from backend import memory_management
 from backend.args import args
@@ -16,6 +18,7 @@ from backend.patcher.vae import VAE
 
 from ..contracts import H3Error, raise_pending_error
 from ..profiles import PICTURE_LABEL
+from ..resize import area_resize
 from .layout import prompt_memory
 from .model import SHIFT, MiniMaxH3
 from .streams import Generation, still_shapes
@@ -120,8 +123,8 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         # standard img2img: Forge's input image is encoded and noised at Denoising strength (the [H3] Enable
         # Reference setting off); otherwise the input image is <Picture 1> and encode_first_stage is a placeholder
         self.img2img_input = False
-        # the [H3] Output scale setting: the decoded picture is shrunk by this whole factor (area filter)
-        self.output_scale = 1
+        # the [H3] Output scale setting: the fraction of each side of the decoded picture that is kept (area filter)
+        self.output_scale = Fraction(1)
 
     def _h3_predictor(self, estimated_config):
         """MiniMax-H3-Image samples on the sigma grid its output heads were distilled on; the others on Forge's
@@ -150,11 +153,12 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         """Called by the script for every generation: whether Forge's img2img input image starts the sampling."""
         self.img2img_input = bool(standard)
 
-    def set_output_scale(self, divisor: int) -> None:
-        """Called by the script for every generation: 1 keeps the decoded picture, 2 or 4 shrinks each side by that
-        factor with an area filter (each output pixel the mean of a 2x2 or 4x4 block), which averages away the
-        pixel-level texture the 16x decoder invents. H3 sizes are multiples of 32, so the factor always divides them."""
-        self.output_scale = max(int(divisor), 1)
+    def set_output_scale(self, scale) -> None:
+        """Called by the script for every generation: 1 keeps the decoded picture; 3/4, 2/3, 1/2 or 1/4 shrinks each
+        side to that fraction with an exact area filter (resize.area_resize), which averages away the pixel-level
+        texture the 16x decoder invents. A side that does not divide is rounded to the nearest pixel (2/3 of 4096 is
+        2731)."""
+        self.output_scale = min(Fraction(scale), Fraction(1))
 
     def condition_images(self) -> list[torch.Tensor]:
         """The pictures the text encoder sees before the prompt as "<Picture i>" (ComfyUI's vision copies)."""
@@ -262,7 +266,7 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
             advice = " Start Forge Neo with --fp32-vae." if vae.vae_dtype != torch.float32 else ""
             raise H3Error(f"The H3 VAE produced NaN or Inf values: the picture would come out black.{advice}")
         frame = pixels[:, :, 0].float()
-        if self.output_scale > 1:
-            frame = torch.nn.functional.avg_pool2d(frame, self.output_scale)
+        if self.output_scale < 1:
+            frame = area_resize(frame, self.output_scale)
         generation.frame = frame.cpu()
         return generation.frame.mul(2.0).sub(1.0)

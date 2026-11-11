@@ -4,6 +4,7 @@ Forge loads the model (native/patches.py registers it), samples and decodes as u
 request, give the sampler the packed video+audio noise of one still image, and let Forge save the picture.
 """
 
+from fractions import Fraction
 from pathlib import Path
 
 from . import pictures
@@ -84,8 +85,9 @@ def script_before_process(p):
 
 REFERENCE_SETTING = "h3_do_reference"
 OUTPUT_SCALE_SETTING = "h3_output_scale"
-# the setting's choices and the factor each side is shrunk by
-OUTPUT_SCALES = {"1": 1, "1/2": 2, "1/4": 4}
+# the setting's choices and the fraction of each side that is kept
+OUTPUT_SCALES = {"1": Fraction(1), "3/4": Fraction(3, 4), "2/3": Fraction(2, 3), "1/2": Fraction(1, 2),
+                 "1/4": Fraction(1, 4)}
 
 
 def reference_mode() -> bool:
@@ -95,11 +97,11 @@ def reference_mode() -> bool:
     return bool(getattr(shared.opts, REFERENCE_SETTING, True))
 
 
-def output_scale() -> tuple[str, int]:
-    """The [H3] Output scale setting: its label and the factor each side of the decoded picture is shrunk by."""
+def output_scale() -> tuple[str, Fraction]:
+    """The [H3] Output scale setting: its label and the fraction of each side of the decoded picture that is kept."""
     from modules import shared
     label = str(getattr(shared.opts, OUTPUT_SCALE_SETTING, "1"))
-    return (label, OUTPUT_SCALES[label]) if label in OUTPUT_SCALES else ("1", 1)
+    return (label, OUTPUT_SCALES[label]) if label in OUTPUT_SCALES else ("1", Fraction(1))
 
 
 def validate_img2img(p, components, reference):
@@ -196,7 +198,7 @@ def process(p):
     engine.set_img2img(getattr(p, "h3_standard_img2img", False))
     scale_label, scale = output_scale()
     engine.set_output_scale(scale)
-    if scale > 1:
+    if scale < 1:
         p.extra_generation_params["H3 Output scale"] = scale_label
     if request.references:
         p.extra_generation_params["H3 Edit pictures"] = request.references

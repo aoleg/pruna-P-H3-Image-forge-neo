@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.13.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.13.1. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -74,7 +74,7 @@ Files are recognized by their tensor layout, not by their name.
 
 ## img2img
 
-**Settings → MiniMax H3 → [H3] Output scale** (1 by default) shrinks the decoded picture by 1/2 or 1/4 with an area filter before Forge saves it; see the README.
+**Settings → MiniMax H3 → [H3] Output scale** (1 by default) shrinks each side of the decoded picture to 3/4, 2/3, 1/2 or 1/4 with an exact area filter before Forge saves it; see the README.
 
 **Settings → MiniMax H3 → [H3] Enable Reference** is on by default: img2img is an edit, with MiniMax-H3-Image or P-H3-Image. Off, img2img is Forge's standard one with either model: the input image is encoded and noised at Denoising strength. The H3-Image schedules stop at sigma 0.42 or above, so with MiniMax-H3-Image even a low Denoising strength starts from a heavily noised picture.
 

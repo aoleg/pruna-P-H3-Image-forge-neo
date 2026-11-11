@@ -454,16 +454,21 @@ class FlowTests(unittest.TestCase):
         sys.modules["modules.shared"].opts.h3_output_scale = "1/2"
         p = Txt2Img()
         self.run_until_sampling(p)
-        self.assertEqual((self.engine.output_scale, p.extra_generation_params["H3 Output scale"]), (2, "1/2"))
+        from fractions import Fraction
+        self.assertEqual((self.engine.output_scale, p.extra_generation_params["H3 Output scale"]), (Fraction(1, 2), "1/2"))
         image = self.engine.decode_first_stage(p.modified_noise)
         self.assertEqual(tuple(image.shape), (1, 3, HEIGHT // 2, WIDTH // 2))
         # each output pixel is the mean of a 2x2 block of the full decode
         self.engine.set_output_scale(1)
         full = self.engine.decode_first_stage(p.modified_noise)
         torch.testing.assert_close(image, torch.nn.functional.avg_pool2d(full, 2), rtol=0, atol=1e-5)
+        # 3/4 keeps three quarters of each side
+        self.engine.set_output_scale(Fraction(3, 4))
+        quarter = self.engine.decode_first_stage(p.modified_noise)
+        self.assertEqual(tuple(quarter.shape), (1, 3, round(HEIGHT * 3 / 4), round(WIDTH * 3 / 4)))
         integration.postprocess(p, None)
         # an unknown value falls back to 1, and 1 leaves no infotext
-        sys.modules["modules.shared"].opts.h3_output_scale = "3/4"
+        sys.modules["modules.shared"].opts.h3_output_scale = "5/6"
         p = Txt2Img()
         self.run_until_sampling(p)
         self.assertEqual(self.engine.output_scale, 1)
