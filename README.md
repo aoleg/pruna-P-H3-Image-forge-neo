@@ -13,7 +13,7 @@ An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02
 >
 > P-H3-Image stays supported. It is still a good **edit-and-upscale** model: in edit mode it does 8 MP and more without running out of memory, in 8 steps, in seconds.
 >
-> See [Settings](#settings) for the MiniMax-H3-Image schedules I use instead of MiniMax's own. **Still untested:** MiniMax-H3-Image's edit mode and 16 MP, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
+> **MiniMax-H3-Image works best with an LCM sampler on MiniMax's own six-step grid.** With Euler, MiniMax's reference recipe leaves speckle, in ComfyUI too; LCM gives the same six sigmas a clean picture in 6 model evaluations. The default is the **H3-Image LCM** sampler, Simple, 6 steps; see [Settings](#settings). **Still untested:** MiniMax-H3-Image's edit mode and 16 MP, and the stock MiniMax H3 checkpoint with Pruna's P-H3-Image LoRA.
 >
 > The repository keeps its old name for now.
 >
@@ -21,7 +21,7 @@ An extension for [Stable Diffusion WebUI Forge Neo](https://github.com/Haoming02
 
 ## What it does
 
-- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 6 to 8 steps with no CFG, on schedules made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
+- **MiniMax-H3-Image**, MiniMax's image model: text-to-image and edits with up to 16 pictures, 4 to 20 MP, in 6 steps with no CFG, on MiniMax's own sigma grid with a sampler made for it. Select its checkpoint, the H3 text encoder and its VAE, and pick the `h3image` UI preset.
 - **P-H3-Image's text encoder and VAE with MiniMax-H3-Image** (experimental): the text encoder takes 3.6 to 9.1 GB in place of 27 GB; the VAE has a different decoder. Select either like any other module.
 - **P-H3-Image text-to-image** at 8 MP in 8 steps, no CFG, with Pruna's own schedule: select the P-H3-Image checkpoint, text encoder and VAE, pick the `ph3` UI preset and generate.
 - **P-H3-Image edits** in img2img: the input image is `<Picture 1>`, the ImageStitch Integrated gallery holds up to 7 references, and the prompt names them.
@@ -84,18 +84,41 @@ Selecting a checkpoint applies the matching profile's sampler, schedule and CFG,
 
 | | `h3image` preset: MiniMax-H3-Image | `ph3` preset: P-H3-Image |
 | --- | --- | --- |
-| Sampler, schedule | Euler, **H3-Image 8-step** | Euler, **P-H3-Image** (Pruna's 8-step grid) |
-| Steps, CFG | 8, 1 | 8, 1 |
+| Sampler, schedule | **H3-Image LCM**, Simple (MiniMax's grid) | Euler, **P-H3-Image** (Pruna's 8-step grid) |
+| Steps, CFG | 6, 1 | 8, 1 |
 | Shift | not used (slider hidden) | 1 |
 | Size | 4 to 20 MP, best about 16 MP | about 8 MP: 2912×2912, 3360×2496, 3872×2176 |
 
-### The H3-Image schedules
+### The H3-Image LCM sampler
 
-MiniMax-H3-Image has three schedules of its own, each named for the step count it was tuned at:
+Euler and Heun carry the model's own noise estimate from step to step. LCM instead takes the model's clean estimate at each step and adds fresh random noise for the next one. MiniMax-H3-Image's last output heads turn the carried noise into speckle and grit, but handle fresh noise cleanly. So with LCM, MiniMax's own grid works as intended: Simple at 6 steps ends at sigma 0.232 and comes out clean.
+
+**H3-Image LCM** is LCM with a noise scale that falls from 1.10 at the first step to 0.90 at the last, the setting of a community ComfyUI workflow. Forge's own **LCM** keeps the scale at 1. Both draw their noise from the image's seeded generator, as Forge's other noise-adding samplers do.
+
+Tested with Forge's own LCM on three prompts and four seeds at 3648×2432 (the noise ramp itself is not yet compared):
+
+| | LCM, Simple | Euler or Heun |
+| --- | --- | --- |
+| 6 steps, ending at 0.232 (MiniMax's grid) | clean, natural skin, text as reliable as with Euler | speckle |
+| 8 steps, ending at about 0.17 | clean, slightly more defined | gritty |
+| P-H3-Image schedule, ending at 0.53 | smeared fabric and garbled text | clean with Heun, the smoothest |
+| Model evaluations | 6 (8 at 8 steps) | Euler 8, Heun 15 at 8 steps |
+
+With LCM the picture is the model's clean estimate from the last step, so the last sigma should be low: the opposite of the Euler rule in the table further down.
+
+![Heun on the P-H3-Image schedule, LCM on the P-H3-Image schedule, and LCM on Simple at 6 steps: crisp, smeared, then clean and natural](images/lcm_tram.jpg)
+
+LCM pictures are softer and lower in contrast than Heun's. Heun is crisper, but it leaves small dark specks in bright areas, like dust on a scanned slide:
+
+![Heun on H3-Image 8-step against LCM on Simple at 6 steps in a softly lit room: dark specks on the bright window with Heun, none with LCM](images/lcm_heun.jpg)
+
+### The H3-Image schedules, for Euler and Heun
+
+For Euler and Heun, MiniMax-H3-Image has three schedules of its own, each named for the step count it was tuned at. Each ends at sigma 0.42, above the range where those samplers fail:
 
 | Schedule | Steps | What it is | Result |
 | --- | ---: | --- | --- |
-| **H3-Image 8-step** | 8 | a shifted flow curve from sigma 1 to 0.42, then 0 | the default, and the crispest |
+| **H3-Image 8-step** | 8 | a shifted flow curve from sigma 1 to 0.42, then 0 | the crispest |
 | **H3-Image 8-step softer** | 8 | the same 0.42 end with a slower start: each sigma halfway between the 8-step curve and Pruna's grid | smoother skin and fewer dark specks, faces still defined |
 | **H3-Image 6-step** | 6 | MiniMax's own six-point grid with its last point lifted from 0.232 to 0.42 | clean, three quarters of the time |
 
@@ -107,21 +130,21 @@ The same seed and prompt on the three schedules, with Heun at 3648×2432. Each r
 
 ![The same three schedules on an indoor portrait of two people: hair, beard and skin go from crisp to smooth](images/schedules_couple.jpg)
 
-**Heun** at 8 steps (15 model evaluations against Euler's 8) gives sharper faces than Euler on all three, with more small dark specks that look like dust on a scanned slide. Euler stays the default because it is twice as fast.
+**Heun** at 8 steps (15 model evaluations against Euler's 8) gives sharper faces than Euler on all three, with more small dark specks that look like dust on a scanned slide. Euler is twice as fast.
 
 ![Euler against Heun on H3-Image 8-step at 6.4 MP: the Heun face is sharper, the Euler face softer](images/heun_euler.jpg)
 
 Each runs at any other step count too: the list is resampled between its two fixed ends, so 10 or 12 steps of the 8-step schedule sample the same curve more finely and never go below its last sigma. More steps are different, not better: 12 steps gave more skin texture and blemishes than 8. The step count also changes the composition, because the first sigmas choose it.
 
-These schedules are a personal pick from same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP, the INT8 checkpoint with P-H3-Image's text encoder). What decides the picture is the lowest sigma the model is evaluated at:
+These schedules are a personal pick from same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP, the INT8 checkpoint with P-H3-Image's text encoder). With Euler, what decides the picture is the lowest sigma the model is evaluated at:
 
-| Last sigma before 0 | Schedules that end there | Picture |
+| Last sigma before 0 | Schedules that end there | Picture with Euler |
 | --- | --- | --- |
 | 0.76 and up | Krea 2 Reference, Flux2 (at this size) | under-denoised, down to a blur |
 | 0.53 | P-H3-Image, MiniMax's grid without its last point (5 steps) | clean, smoother, a little more grain |
 | 0.27 to 0.42 | the three H3-Image schedules, Linear Quadratic, Qwen Image 2.1 Turbo | clean and crisp, nearly the same picture across the range |
-| 0.232 | Simple at 6 steps, which is **MiniMax's reference recipe** | speckle |
-| below 0.2 | Simple, SGM Uniform, Beta, Bong Tangent and Normal at 8 steps | gritty: leathery skin, noise in flat areas |
+| 0.232 | Simple at 6 steps, which is **MiniMax's reference recipe** | speckle (clean with LCM) |
+| below 0.2 | Simple, SGM Uniform, Beta, Bong Tangent and Normal at 8 steps | gritty: leathery skin, noise in flat areas (Simple at 8 steps is clean with LCM) |
 
 Four rows of the table on one seed with Euler at 6.4 MP, with a 1:1 crop of the face below each picture:
 
@@ -131,7 +154,7 @@ MiniMax's reference recipe, Simple at 6 steps, against Simple at 8 steps and the
 
 ![Simple at 6 steps leaves speckle on the face and the wall, Simple at 8 steps leaves grit, P-H3-Image is clean](images/minimax_reference.jpg)
 
-Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe stays one schedule and step count away. The failure is not this port's: MiniMax's own ComfyUI workflow, run in SwarmUI, gives the same speckle, and MiniMax's diffusers scheduler takes an Euler step as well. Whether the cause is the model or its INT8 file is not known. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
+Every Forge schedule is mapped onto the sigma grid stored in the checkpoint, and Simple at 6 steps gives exactly the six sigmas its output heads were made for, so the reference recipe is one sampler away. The failure is not this port's: MiniMax's own ComfyUI workflow, run in SwarmUI, gives the same speckle, and MiniMax's diffusers scheduler takes an Euler step as well. It is Euler's: LCM on the same sigmas is clean. The P-H3-Image schedule is Pruna's own sigma grid and ignores Shift; another step count resamples the same curve. Batch Size stays 1 (use Batch Count); Hires. fix and the Refiner are hidden while an H3 checkpoint is selected.
 
 ## Editing
 

@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .sampler import SAMPLER
+
 # the ManualSigmas grid of Pruna's workflows: 8 Euler steps at shift 1, no CFG
 PH3_IMAGE_SIGMAS = (1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0)
 PH3_IMAGE_SCHEDULER = "P-H3-Image"
@@ -15,7 +17,8 @@ H3_IMAGE_PICTURE_LABEL = "Picture %d: "
 # the sigma grid of MiniMax-H3-Image's six output heads (the checkpoint's pdd_config.json)
 H3_IMAGE_PDD_SIGMAS = (1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0)
 
-# The MiniMax-H3-Image schedules. Same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP): the picture is clean when
+# The MiniMax-H3-Image schedules for Euler and Heun (the default sampler, H3-Image LCM, runs MiniMax's own grid
+# through Simple and needs none of them). Same-seed tests on an RTX 5090 (Euler, CFG 1, 6.4 MP): the picture is clean when
 # the last model evaluation is at sigma 0.27 or above and the sampler jumps from there to 0, and comes out gritty when
 # the model is evaluated lower: the grid's own last point, 0.232, already leaves speckle, and Simple at 8 steps (0.38,
 # then 0.17) is far worse. Anything from 0.27 to 0.42 gives the same picture, 0.53 a softer one, 0.76 an under-denoised
@@ -67,9 +70,10 @@ PH3_IMAGE = Profile(name="ph3", label="P-H3-Image", sampler="Euler", scheduler=P
 # MiniMax's own MiniMax-H3-Image: the H3 DiT without the audio stream, six output heads distilled on the checkpoint's
 # sigma grid, the H3 32B text encoder and a 2D image VAE; no CFG, about 4 to 20 MP, best around 16 MP.
 # MiniMax's reference recipe is Euler, Simple, 6 steps (Simple lands on the checkpoint's grid); its last step, at sigma
-# 0.232, left speckle in the owner's tests, so the default is the 8-step schedule above. The reference recipe stays one
-# schedule and step count away.
-H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler="Euler", scheduler=H3_IMAGE_8_STEP, steps=8, cfg=1.0,
+# 0.232, leaves speckle, in ComfyUI too. The default keeps the grid and swaps the sampler: LCM noises each clean
+# estimate afresh, and the same six sigmas come out clean (sampler.py). The H3-Image schedules above are for Euler and
+# Heun, which need a last sigma of 0.27 or more.
+H3_IMAGE = Profile(name="h3image", label="MiniMax-H3-Image", sampler=SAMPLER, scheduler="Simple", steps=6, cfg=1.0,
                    shift=1.0, size=4096, text_encoder="h3", vae="h3-image", dit="h3-image", max_pictures=16,
                    picture_label=H3_IMAGE_PICTURE_LABEL, shift_used=False)
 # MiniMax's reference recipe for it, for the panel and the documentation

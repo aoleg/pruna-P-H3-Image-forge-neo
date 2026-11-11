@@ -40,16 +40,18 @@ class ProfileTests(unittest.TestCase):
         self.assertIs(for_components("h3-image", "h3"), H3_IMAGE)
         self.assertIs(for_components("h3-image", "ph3-image"), H3_IMAGE)
         self.assertEqual((H3_IMAGE.steps, H3_IMAGE.cfg, H3_IMAGE.picture_label, H3_IMAGE.edit_prefix, H3_IMAGE.shift_used),
-                         (8, 1.0, "Picture %d: ", False, False))
-        # the default is the 8-step schedule; MiniMax's own recipe is kept as the documented alternative
-        self.assertEqual((H3_IMAGE.sampler, H3_IMAGE.scheduler, H3_IMAGE_REFERENCE), ("Euler", H3_IMAGE_8_STEP, ("Euler", "Simple", 6)))
+                         (6, 1.0, "Picture %d: ", False, False))
+        # the default is MiniMax's own grid (Simple, 6 steps) through the LCM sampler; MiniMax's Euler recipe is kept
+        # as the documented reference
+        self.assertEqual((H3_IMAGE.sampler, H3_IMAGE.scheduler, H3_IMAGE_REFERENCE), ("H3-Image LCM", "Simple", ("Euler", "Simple", 6)))
 
     def test_every_default_schedule_is_registered(self):
         labels = [label for _, label, _ in SCHEDULERS]
         self.assertEqual(labels, ["P-H3-Image", "H3-Image 8-step", "H3-Image 8-step softer", "H3-Image 6-step"])
         self.assertEqual(len({name for name, _, _ in SCHEDULERS}), len(SCHEDULERS))
-        for profile in ALL:
-            self.assertIn(profile.scheduler, labels)
+        # Pruna's grid is an added schedule; MiniMax's is Forge's Simple
+        self.assertIn(PH3_IMAGE.scheduler, labels)
+        self.assertEqual(H3_IMAGE.scheduler, "Simple")
 
 
 @unittest.skipIf(torch is None, "needs torch")

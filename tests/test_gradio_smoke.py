@@ -118,7 +118,7 @@ class GradioSmoke(unittest.TestCase):
                 self.assertEqual([enter[i]["value"] for i in (4, 5, 6)], ["Euler", "Automatic", 3.5])
                 from forge_h3.profiles import H3_IMAGE, PH3_IMAGE
                 self.assertEqual(ui.preset_settings("img2img", PH3_IMAGE), ("Euler", "P-H3-Image", 1.0))
-                self.assertEqual(ui.preset_settings("img2img"), ("Euler", "H3-Image 8-step", 1.0))
+                self.assertEqual(ui.preset_settings("img2img"), ("H3-Image LCM", "Simple", 1.0))
                 self.assertEqual(ui.preset_settings("txt2img", H3_IMAGE), ui.preset_settings("img2img"))
                 modules.shared.opts.ph3_t2i_cfg = 0
                 self.assertIsNone(ui.preset_settings("txt2img", PH3_IMAGE)[2])

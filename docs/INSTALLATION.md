@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.11.1. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.12.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -66,7 +66,7 @@ Files are recognized by their tensor layout, not by their name.
 
 ## Selecting the components
 
-1. Pick the UI preset: **h3image** for MiniMax-H3-Image (Euler, the H3-Image 8-step schedule, 8 steps by default; MiniMax's reference is Euler, Simple, 6 steps), **ph3** for P-H3-Image. If you used the h3image preset before 0.10.0, Forge may have saved its old schedule: set it under **Settings → Presets → H3IMAGE**. The schedules **H3-Image 8-step**, **8-step softer** and **6-step** are named for the step count they were tuned at and resample to any other count; see the README for what each is. The preset sets sampler, schedule, steps, CFG and Shift; selecting an H3 checkpoint also re-applies the profile's sampler, schedule and CFG, whatever preset is active.
+1. Pick the UI preset: **h3image** for MiniMax-H3-Image (the **H3-Image LCM** sampler, Simple, 6 steps by default; MiniMax's reference is Euler, Simple, 6 steps), **ph3** for P-H3-Image. If you used the h3image preset before 0.12.0, Forge may have saved its old sampler, schedule and steps: set them under **Settings → Presets → H3IMAGE**. For Euler and Heun, the schedules **H3-Image 8-step**, **8-step softer** and **6-step** are named for the step count they were tuned at and resample to any other count; see the README for what each is. The preset sets sampler, schedule, steps, CFG and Shift; selecting an H3 checkpoint also re-applies the profile's sampler, schedule and CFG, whatever preset is active.
 2. Select the checkpoint in the checkpoint selector.
 3. Under **VAE / Text Encoder**, select the text encoder and the VAE, one of each. The **Components** part of the **MiniMax H3** panel lists what was recognized and which model it is.
 4. Set Width and Height: multiples of 32, at least 64. MiniMax-H3-Image works from 4 to 20 MP and is best around 16 MP (4096×4096, 4736×3552, 5024×3360, 5472×3072, 6272×2688). P-H3-Image renders best at about 8 MP (2912×2912 and the sizes in its README) and edits at about 4 MP.

@@ -153,7 +153,7 @@ class HeaderTests(unittest.TestCase):
         components = resolve_components(dit, [te, vae])
         profile = components.profile
         self.assertEqual((profile.name, profile.steps, profile.cfg, profile.scheduler, profile.max_pictures),
-                         ("h3image", 8, 1.0, "H3-Image 8-step", 16))
+                         ("h3image", 6, 1.0, "Simple", 16))
         self.assertTrue(components.wants_int8_attention)
         ph3 = [checkpoint(self.root / "ph3_te.safetensors", PH3_TE), checkpoint(self.root / "ph3_vae.safetensors", PH3_VAE)]
         self.assertFalse(resolve_components(checkpoint(self.root / "model.safetensors", DIT), ph3).wants_int8_attention)

@@ -58,6 +58,17 @@ def register() -> None:
             shared.opts.add_option(key, info)
 
 
+def register_sampler() -> None:
+    """The H3-Image LCM sampler as a Forge k-diffusion sampler, before the UI lists the samplers."""
+    from modules import sd_samplers, sd_samplers_common, sd_samplers_kdiffusion
+
+    from ..sampler import SAMPLER, sample_h3_image_lcm
+
+    data = sd_samplers_common.SamplerData(
+        SAMPLER, lambda model: sd_samplers_kdiffusion.KDiffusionSampler(sample_h3_image_lcm, model), ["h3_image_lcm"], {})
+    sd_samplers.add_sampler(data)
+
+
 def register_scheduler() -> None:
     """The models' own schedules as Forge schedules, before the UI lists the schedules."""
     from modules import sd_schedulers
