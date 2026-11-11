@@ -58,8 +58,8 @@ def validate_processing(p):
     if (getattr(p, "subseed_strength", 0) > 0 or getattr(p, "seed_resize_from_w", -1) > 0
             or getattr(p, "seed_resize_from_h", -1) > 0):
         raise H3Error("Disable variation seed and seed resize for H3.")
-    if getattr(p, "script_args", ()) and p.script_args[0] not in (0, None, "None"):
-        raise H3Error("Select Script: None for H3 generation. Script combinations are not validated yet.")
+    # Scripts (X/Y/Z plot, Prompts from file and the like) are allowed: they run Forge's processing once per picture,
+    # and each run passes the checks above
 
 
 def before_process(p):

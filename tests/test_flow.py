@@ -460,6 +460,13 @@ class FlowTests(unittest.TestCase):
         integration.before_process(p)
         self.assertIsNotNone(p.h3_request)
 
+    def test_a_selected_script_runs_like_a_plain_generation(self):
+        # X/Y/Z plot, Prompts from file: Forge's script dropdown sends the script's index first
+        p = Txt2Img()
+        p.script_args = [3] + p.script_args[1:]
+        integration.before_process(p)
+        self.assertIsNotNone(p.h3_request)
+
     def test_other_checkpoints_are_left_alone(self):
         sys.modules["modules.sd_models"].get_closet_checkpoint_match = lambda value: types.SimpleNamespace(
             filename=str(checkpoint(self.root / "sd.safetensors", {"unet.weight": ("F16", [4, 4])})))

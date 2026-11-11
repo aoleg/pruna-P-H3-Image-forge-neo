@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.12.1. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.12.2. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -99,7 +99,6 @@ With the setting on, the input image is `<Picture 1>`; **ImageStitch Integrated*
 | `H3 generates one picture at a time` | Set Batch Size to 1 and use Batch Count. |
 | `The img2img input image did not reach H3` | Set **Settings → VAE → VAE for Encoding** to **Full**. |
 | The process is killed while loading or adding a LoRA | Not enough system RAM. Close other programs, restart Forge before changing the text encoder, and prefer the smaller files. |
-| `Select Script: None for H3 generation` | Generation scripts are not supported. |
 
 Report other errors on the [issue tracker](https://github.com/aoleg/pruna-P-H3-Image-forge-neo/issues) with the console output.
 
