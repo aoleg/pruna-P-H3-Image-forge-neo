@@ -80,7 +80,8 @@ def settings():
                                              {"minimum": 0.0, "maximum": 1.0, "step": 0.05}, section=section)
                            .info("experimental, MiniMax-H3-Image only: moves its sigma grid with the picture size, "
                                  "lower below 16 MP and higher above, as Krea 2 and Flux move their shift; 0 keeps "
-                                 "MiniMax's fixed grid, 0.5 is SD3's rule (at 4 MP the shift halves)"))
+                                 "MiniMax's fixed grid, 0.5 is SD3's rule (at 4 MP the shift halves); no gain on the "
+                                 "stock checkpoint in tests, more grit with Euler at 4 MP"))
 
 
 script_callbacks.on_ui_settings(settings)

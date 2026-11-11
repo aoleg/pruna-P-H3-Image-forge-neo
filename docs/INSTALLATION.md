@@ -76,7 +76,7 @@ Files are recognized by their tensor layout, not by their name.
 
 **Settings → MiniMax H3 → [H3] Output scale** (1 by default) shrinks each side of the decoded picture to 3/4, 2/3, 1/2 or 1/4 with an exact area filter before Forge saves it; see the README.
 
-**Settings → MiniMax H3 → [H3] Resolution shift** (0 by default, experimental) moves MiniMax-H3-Image's sigma grid with the picture size. Restart Forge after an update, because the H3 schedules are registered at startup. See the README.
+**Settings → MiniMax H3 → [H3] Resolution shift** (0 by default, experimental) moves MiniMax-H3-Image's sigma grid with the picture size. It gave no gain on the stock checkpoint, so leave it at 0. Restart Forge after an update, because the H3 schedules are registered at startup. See the README.
 
 **Settings → MiniMax H3 → [H3] Enable Reference** is on by default: img2img is an edit, with MiniMax-H3-Image or P-H3-Image. Off, img2img is Forge's standard one with either model: the input image is encoded and noised at Denoising strength. The H3-Image schedules stop at sigma 0.42 or above, so with MiniMax-H3-Image even a low Denoising strength starts from a heavily noised picture.
 

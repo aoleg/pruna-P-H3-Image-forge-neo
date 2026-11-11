@@ -193,7 +193,9 @@ MiniMax's six-point grid is a shifted flow curve: logit(σ) = ln 3 + 1.42·logit
 | 0.25 | ×0.71 | 0.955, 0.848, 0.680, 0.446, 0.176 |
 | 0.5 | ×0.50 | 0.937, 0.798, 0.600, 0.363, 0.131 |
 
-Forge's schedules land on the moved grid as they land on the stock one, so Simple at 6 steps gives the six moved sigmas, and each output head still runs at its own step. The four H3 schedules move by the same factor. The infotext records the setting as "H3 Resolution shift". It has not been tested on a GPU yet. The moved grid ends lower, which plain Euler turns into grit, so try it with H3-Image LCM or Euler a. The [FineView](#minimax-h3-image) merge moves its shift with resolution as well, from 5 to 4.44 at 4 MP.
+Forge's schedules land on the moved grid as they land on the stock one, so Simple at 6 steps gives the six moved sigmas, and each output head still runs at its own step. The four H3 schedules move by the same factor. The infotext records the setting as "H3 Resolution shift".
+
+**Result on the stock checkpoint: no gain, so leave it at 0.** I tested it on an RTX 5090 with the INT8 checkpoint, comparing same-seed pictures at strengths 0, 0.25 and 0.5 (and 1 once). At 9 MP (3008×3008), four seeds with H3-Image LCM and one scene each with Euler and Euler a changed by 3% or less in flat-area noise and fine texture. At 4 MP (2048×2048) the moved grid ends lower, and Euler and Euler a turn that into grit: noise in flat areas rose by 13 to 28% at 0.5, and strength 1 was worse still. With H3-Image LCM at 4 MP the result was mixed: slightly less flat-area noise and slightly more 2 to 8 px texture. The hatched fur and crunchy beards of the stock checkpoint at 4 MP stayed at every strength. At 4 MP the first steps change, so the composition moves as well. [FineView](#minimax-h3-image) at 4 MP stayed clearly cleaner than every strength, so its gain comes from its new output heads. A schedule cannot repair the stock heads. FineView also lowers its shift at 4 MP, from 5 to 4.44, and the setting applies to FineView as well, because FineView loads as MiniMax-H3-Image. That combination is untested.
 
 ### Output scale
 
