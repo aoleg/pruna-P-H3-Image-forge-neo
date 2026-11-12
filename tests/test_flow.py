@@ -207,10 +207,12 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(out).all())
         layout = next(iter(dit._layouts.values()))
         self.assertEqual([k for _, _, k in layout.segments], ["text", "ref_img", "ref_img", "audio", "video"])
-        # the pictures' rows join the sequence the reservation is sized from
+        # the pictures' rows and the prompt's vision blocks join the sequence the reservation is sized from
         from forge_h3.native import engine as engine_module
+        vision = sum(stop - start for start, stop in self.engine.generation.vision_spans)
+        self.assertEqual(vision, 3)
         self.assertEqual(engine_module.sampling_tokens(self.engine.generation),
-                         6 + 4 + (2 * 8 // 4) + (4 * 2 // 4) + engine_module.TEXT_TOKENS_RESERVED)
+                         6 + 4 + (2 * 8 // 4) + (4 * 2 // 4) + vision + engine_module.TEXT_TOKENS_RESERVED)
         # the next txt2img request drops the pictures
         p = Txt2Img()
         self.run_until_sampling(p)
@@ -429,6 +431,13 @@ class FlowTests(unittest.TestCase):
         self.assertEqual([(r["kind"], r["latent_h"], r["latent_w"], tuple(r["latent"].shape)) for r in generation.refs],
                          [("image", 2, 8, (1, 24, 1, 2, 8))])
         self.assertEqual(generation.vision_spans, [(0, 3)])
+        # the reservation counts the reference's rows and the prompt's vision block next to the target's
+        from forge_h3.native import engine as engine_module
+        # target 2x3 rows, the audio stub's 4, the reference's 1x4 and the 3 vision tokens
+        tokens = (HEIGHT // 32) * (WIDTH // 32) + 4 + 1 * 4 + 3 + engine_module.TEXT_TOKENS_RESERVED
+        self.assertEqual(engine_module.sampling_tokens(generation), tokens)
+        self.assertEqual(self.engine.forge_objects.unet.extra_preserved_memory_during_sampling,
+                         tokens * engine_module.SAMPLING_BYTES_PER_TOKEN + engine_module.SAMPLING_FIXED_BYTES)
         dit = self.engine.forge_objects.unet.model.diffusion_model
         out = dit(p.modified_noise, torch.tensor([900.0]), cond[0].unsqueeze(0))
         self.assertTrue(torch.isfinite(out).all())

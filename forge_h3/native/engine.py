@@ -51,11 +51,14 @@ DECODE_FIXED_BYTES = 256 * 1024 * 1024
 
 
 def sampling_tokens(generation: "Generation") -> int:
-    """The DiT's sequence length for a generation, the prompt's share estimated."""
+    """The DiT's sequence length for a generation, the prompt's text share estimated. An edit's prompt also carries
+    each picture's vision block, one token per 32x32 pixels of the text encoder's copy (about 1000 to 1500 at a 1024
+    short edge), which the encoder has already placed: they are counted exactly."""
     shapes = generation.shapes
     _, _, t, h, w = shapes.video
     rows = t * ((h + 1) // 2) * ((w + 1) // 2) + shapes.audio[2] * shapes.audio[3]
     rows += sum(((r["latent_h"] + 1) // 2) * ((r["latent_w"] + 1) // 2) for r in generation.refs)
+    rows += sum(stop - start for start, stop in generation.vision_spans)
     return rows + TEXT_TOKENS_RESERVED
 
 
