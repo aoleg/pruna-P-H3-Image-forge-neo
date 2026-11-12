@@ -225,7 +225,7 @@ Off, img2img is Forge's own with either model: the input image is encoded, noise
 
 - MiniMax-H3-Image with P-H3-Image's text encoder is an experiment: one same-seed comparison gave a similar composition with different small details, and all the schedule tests above used it.
 - MiniMax-H3-Image runs at up to 16 MP, with either text encoder and either image VAE. Its reference recipe (Euler, Simple, 6 steps) is clean at 16 MP and leaves speckle below about 9 MP, in ComfyUI too; the H3-Image LCM sampler avoids it at any size. It has not been tried for edits.
-- The working-memory reservation is an estimate (the console prints the measured figure on the first step of every generation).
+- The working-memory reservation (192 KiB per token plus 1 GiB) comes from one measured run, MiniMax-H3-Image with the INT8 DiT on a 32 GB card, which used about 150 KiB per token. Edits with reference pictures and P-H3-Image have not been measured. The console prints the measured figure on the first step of every generation.
 - The stock MiniMax H3 checkpoint with Pruna's LoRA has not been run yet.
 - P-H3-Image's text-to-image is soft in small detail at every size tried. The sampling path matches ComfyUI's stage by stage, and the launch flags that lower precision made no difference, so the comparison left is the same prompt in ComfyUI.
 

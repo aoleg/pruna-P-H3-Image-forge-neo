@@ -34,11 +34,14 @@ def encode_memory(shape, dtype) -> int:
 # Forge sizes the sampling headroom from the packed latent's element count (about 100k for a 1 MP still, halved
 # again for INT8 models), which left 1.2 GB free next to a resident text encoder on a 32 GB card. The DiT's working
 # memory scales with its sequence instead: fp32 rows, the 28672-wide MLP activations, INT8 activation buffers and
-# the allocator's slack: a few hundred KB per token by the layers' widths, kept with a margin until a measured run
-# says more (the first sampling step prints it). The reservation below is what Forge keeps free when it loads the DiT
-# for sampling, so the text encoder leaves VRAM (partly or wholly) when the two do not fit together. MiniMax-H3-Image
-# at 16 MP is 16k image tokens: twice the figure would push most of the DiT itself out of a 32 GB card.
-SAMPLING_BYTES_PER_TOKEN = 768 * 1024
+# the allocator's slack. The first sampling step prints the measured figure: MiniMax-H3-Image with the INT8 DiT on an
+# RTX 5090 used 2.28 GiB for 16199 tokens (148 KiB per token) and 0.67 GiB for 4154 (169 KiB), about 140 KiB per
+# token plus a small fixed part. The reservation below is what Forge keeps free when it loads the DiT for sampling,
+# so the text encoder leaves VRAM (partly or wholly) when the two do not fit together. Too much offloads the DiT
+# itself: the former 768 KiB per token kept 13.5 GiB free at 16 MP and left 9.5 GB of the DiT in system RAM, so
+# every step waited on weight transfers whatever its size. 192 KiB plus the fixed GiB is 1.8x the measured total at
+# 16 MP and lets the whole DiT load on a 32 GB card.
+SAMPLING_BYTES_PER_TOKEN = 192 * 1024
 SAMPLING_FIXED_BYTES = 1024 * 1024 * 1024
 # the prompt's share of the sequence is not known when the reservation is made; a long edit brief is a few hundred
 TEXT_TOKENS_RESERVED = 1024
