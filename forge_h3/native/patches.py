@@ -20,7 +20,7 @@ from backend.state_dict import load_state_dict
 from huggingface_guess import detection, model_list
 from transformers.modeling_utils import no_init_weights
 
-from . import filebacked, gguf_vision, model, release, vae
+from . import cuda_errors, filebacked, gguf_vision, model, release, vae
 from .engine import MiniMaxH3Engine
 from .image_vae import H3ImageVAE, MiniMaxH3ImageVAE, PH3ImageVAE
 from .islands import floating_dtype, fp32_islands, restore_fp32
@@ -334,6 +334,9 @@ def apply() -> None:
     _hook_components()
     _hook_conditions()
     _hook_unload()
+    # see cuda_errors.py: a CUDA fault that Forge calls out of memory gets its traceback printed
+    if hasattr(memory_management, "is_oom") and not hasattr(memory_management.is_oom, "__wrapped__"):
+        memory_management.is_oom = cuda_errors.report_disguised(memory_management.is_oom)
     try:
         _hook_taesd()
     except Exception as e:

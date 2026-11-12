@@ -42,20 +42,35 @@ def reload_instead_of_unload(need_global_unload: bool, active_model) -> bool:
     return bool(need_global_unload) and getattr(active_model, "is_h3", False)
 
 
+def _finish_gpu_work() -> None:
+    # Forge copies offloaded weights on a side stream; nothing may still read a tensor that is about to be freed
+    if torch.cuda.is_available() and torch.cuda.is_initialized():
+        torch.cuda.synchronize()
+
+
 def release_replaced(loaded_models, active_model, types: tuple[type, ...]) -> int:
     """Empty the H3 models Forge still lists as loaded once H3 is no longer the active model; returns how many."""
     if getattr(active_model, "is_h3", False):
         return 0
-    released = 0
+    replaced = []
     for loaded in list(loaded_models):
         patcher = getattr(loaded, "model", None)
         module = getattr(patcher, "model", None)
-        if not is_h3_module(module, types):
-            continue
+        if is_h3_module(module, types):
+            replaced.append((patcher, module))
+    if not replaced:
+        return 0
+    _finish_gpu_work()
+    for patcher, module in replaced:
+        # with --pin-shared-memory Forge registers the offloaded CPU weights with CUDA (cudaHostRegister) and finds
+        # them again by name to unregister them on detach; once emptied it cannot, and the registered host memory
+        # would be freed under CUDA, which breaks the CUDA context until Forge restarts. Unpin them first.
+        unpin = getattr(patcher, "unpin_all_weights", None)
+        if callable(unpin):
+            unpin()
         # the original weights a LoRA patch kept would be copied back on detach
         backup = getattr(patcher, "backup", None)
         if isinstance(backup, dict):
             backup.clear()
         empty_tensors(module)
-        released += 1
-    return released
+    return len(replaced)
