@@ -259,6 +259,10 @@ class MiniMaxH3Model(nn.Module):
         # rotation table computed once per forward, consumed by the kitchen split-half rope
         rope_freqs = rope_rotation_table(self.rope_freqs(layout.position_ids, device), dtype)
 
+        # the fused comfy-kitchen path for the whole forward (kernels.why_not names the reason when it is off)
+        fused = kernels.fused(h, dtype)
+        kernels.report(self, h, dtype, fused)
+        transformer_options["h3_fused"] = fused
         for i, block in enumerate(self.blocks):
             transformer_options["block_index"] = i
             h = block(h, t_emb, mod_segments, rope_freqs, transformer_options)

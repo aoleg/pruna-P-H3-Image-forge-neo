@@ -89,7 +89,10 @@ class MLP(nn.Module):
         self.fc1 = nn.Linear(hidden, ffn * 2, bias=False, dtype=dtype, device=device)
         self.fc2 = nn.Linear(ffn, hidden, bias=False, dtype=dtype, device=device)
 
-    def forward(self, x):
+    def forward(self, x, fused=False):
+        if fused:
+            # SwiGLU folded into fc2's INT8 ConvRot GEMM where the weight allows (kernels.linear_swiglu)
+            return kernels.linear_swiglu(self.fc2, self.fc1(x))
         gate, up = self.fc1(x).chunk(2, dim=-1)
         return self.fc2(nn.functional.silu(gate).mul_(up))
 
@@ -169,11 +172,19 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, t_emb, mod_segments, rope_freqs, transformer_options=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaln_proj(t_emb)
-        h = _mod_scale_shift(self.norm1(x), shift_msa, scale_msa, mod_segments)
+        # the fused comfy-kitchen path, decided once per forward (MiniMaxH3Model._forward, kernels.why_not)
+        fused = bool((transformer_options or {}).get("h3_fused"))
+        if fused:
+            h = kernels.modulated_norm(self.norm1, x, shift_msa, scale_msa, mod_segments)
+        else:
+            h = _mod_scale_shift(self.norm1(x), shift_msa, scale_msa, mod_segments)
         attn = self.attn(h, rope_freqs=rope_freqs, transformer_options=transformer_options)
         x = _mod_gate(x, gate_msa, attn, mod_segments)
-        h = _mod_scale_shift(self.norm2(x), shift_mlp, scale_mlp, mod_segments)
-        return _mod_gate(x, gate_mlp, self.mlp(h), mod_segments)
+        if fused:
+            h = kernels.modulated_norm(self.norm2, x, shift_mlp, scale_mlp, mod_segments)
+        else:
+            h = _mod_scale_shift(self.norm2(x), shift_mlp, scale_mlp, mod_segments)
+        return _mod_gate(x, gate_mlp, self.mlp(h, fused=fused), mod_segments)
 
 
 class FinalLayer(nn.Module):

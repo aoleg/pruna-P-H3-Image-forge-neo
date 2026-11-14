@@ -82,6 +82,11 @@ def settings():
                                  "lower below 16 MP and higher above, as Krea 2 and Flux move their shift; 0 keeps "
                                  "MiniMax's fixed grid, 0.5 is SD3's rule (at 4 MP the shift halves); no gain on the "
                                  "stock checkpoint in tests, more grit with Euler at 4 MP"))
+    # forge_h3/native/kernels.py FUSED_SETTING; named here so settings never import the native backend
+    shared.opts.add_option("h3_fused_kernels",
+                           shared.OptionInfo(True, "[H3] Fused kernels", section=section)
+                           .info("runs the DiT block's norms and SwiGLU on comfy-kitchen's fused kernels (CUDA, bf16 or "
+                                 "float32 compute); turn off to compare with the previous path"))
     low, high = sampler.S_NOISE_RANGE
     noise_slider = {"minimum": low, "maximum": high, "step": 0.1}
     shared.opts.add_option(sampler.S_NOISE_START_SETTING,
