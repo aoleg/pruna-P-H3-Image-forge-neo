@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.14.4. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.15.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -75,6 +75,8 @@ Files are recognized by their tensor layout, not by their name.
 ## img2img
 
 **Settings → MiniMax H3 → [H3] Output scale** (1 by default) shrinks each side of the decoded picture to 3/4, 2/3, 1/2 or 1/4 with an exact area filter before Forge saves it; see the README.
+
+**Settings → MiniMax H3 → [H3] LCM noise, first step / last step** (1.10 and 0.90 by default, 0.5 to 2.0) set the noise scale of the H3-Image LCM sampler at the first and the last step that adds noise: above 1 adds fine detail, below 1 smooths; see the README.
 
 **Settings → MiniMax H3 → [H3] Resolution shift** (0 by default, experimental) moves MiniMax-H3-Image's sigma grid with the picture size. It gave no gain on the stock checkpoint, so leave it at 0. Restart Forge after an update, because the H3 schedules are registered at startup. See the README.
 

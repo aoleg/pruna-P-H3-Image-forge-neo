@@ -95,7 +95,9 @@ Selecting a checkpoint applies the matching profile's sampler, schedule and CFG,
 
 Euler and Heun carry the model's own noise estimate from step to step. LCM instead takes the model's clean estimate at each step and adds fresh random noise for the next one. Below about 16 MP, MiniMax-H3-Image's last output heads turn the carried noise into speckle and grit, but handle fresh noise cleanly. So with LCM, MiniMax's own grid works at any size: Simple at 6 steps ends at sigma 0.232 and comes out clean.
 
-**H3-Image LCM** is LCM with a noise scale that falls from 1.10 at the first step to 0.90 at the last, the setting of a community ComfyUI workflow. Forge's own **LCM** keeps the scale at 1. Both draw their noise from the image's seeded generator, as Forge's other noise-adding samplers do.
+**H3-Image LCM** is LCM with a noise scale that falls from 1.10 at the first step that adds noise to 0.90 at the last one, the setting of a community ComfyUI workflow (the final step goes to sigma 0 and adds none). Forge's own **LCM** keeps the scale at 1. Both draw their noise from the image's seeded generator, as Forge's other noise-adding samplers do.
+
+The scale sets how much fine detail the picture gets: above 1 the model is handed more noise than the step's sigma says and keeps the extra as texture, and below 1 it smooths more. **Settings → MiniMax H3 → [H3] LCM noise, first step** and **[H3] LCM noise, last step** change the two ends, from 0.5 to 2.0; the steps between run linearly from one to the other, and the same value in both gives a flat scale, like ComfyUI's `s_noise`. The infotext records values other than 1.10 and 0.90, and pasting it sets them back.
 
 Tested with Forge's own LCM on three prompts and four seeds at 3648×2432 (the noise ramp itself is not yet compared):
 

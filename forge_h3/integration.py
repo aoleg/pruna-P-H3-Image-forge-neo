@@ -11,6 +11,14 @@ from . import pictures
 from .contracts import GenerationRequest, H3Error, set_pending_error
 from .models import inspect_model, resolve_components
 from .resolution_shift import odds_factor
+from .sampler import (
+    S_NOISE_END,
+    S_NOISE_END_INFOTEXT,
+    S_NOISE_START,
+    S_NOISE_START_INFOTEXT,
+    SAMPLER,
+    noise_settings,
+)
 
 # StableDiffusionProcessing.distilled_cfg_scale when a request does not set it
 API_DEFAULT_DISTILLED_CFG = 3.5
@@ -212,6 +220,12 @@ def process(p):
     engine.set_output_scale(scale)
     if scale < 1:
         p.extra_generation_params["H3 Output scale"] = scale_label
+    if getattr(p, "sampler_name", None) == SAMPLER:
+        # recorded under the settings' infotext names, so pasting the infotext sets the sliders back
+        first, last = noise_settings()
+        if (first, last) != (S_NOISE_START, S_NOISE_END):
+            p.extra_generation_params[S_NOISE_START_INFOTEXT] = f"{first:g}"
+            p.extra_generation_params[S_NOISE_END_INFOTEXT] = f"{last:g}"
     strength = resolution_shift()
     factor = odds_factor(p.width, p.height, strength)
     if engine.set_resolution_shift(factor) and strength > 0:

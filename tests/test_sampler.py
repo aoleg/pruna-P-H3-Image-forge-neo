@@ -7,16 +7,36 @@ try:
 except ImportError:
     torch = None
 
-from forge_h3.sampler import S_NOISE_END, S_NOISE_START, SAMPLER, noise_scale
+import sys
+import types
+from unittest.mock import patch
+
+from forge_h3.sampler import (
+    S_NOISE_END,
+    S_NOISE_START,
+    SAMPLER,
+    noise_scale,
+    noise_settings,
+)
 
 
 class NoiseScaleTests(unittest.TestCase):
-    def test_the_scale_falls_linearly_from_the_first_step_to_the_last(self):
+    def test_the_scale_falls_linearly_from_the_first_noise_step_to_the_last(self):
         self.assertEqual(SAMPLER, "H3-Image LCM")
         self.assertEqual((S_NOISE_START, S_NOISE_END), (1.10, 0.90))
-        # Simple at 6 steps: the community workflow's numbers, the last one unused (the step to 0 adds no noise)
-        self.assertEqual([round(noise_scale(i, 6), 4) for i in range(6)], [1.10, 1.06, 1.02, 0.98, 0.94, 0.90])
+        # Simple at 6 steps adds noise after the first five; the step to 0 adds none
+        self.assertEqual([round(noise_scale(i, 5), 4) for i in range(5)], [1.10, 1.05, 1.00, 0.95, 0.90])
         self.assertEqual(noise_scale(0, 1), S_NOISE_START)
+        self.assertEqual([noise_scale(i, 3, 1.5, 1.5) for i in range(3)], [1.5, 1.5, 1.5])
+
+    def test_the_settings_are_read_and_clamped_to_the_slider_range(self):
+        self.assertEqual(noise_settings(), (S_NOISE_START, S_NOISE_END))
+        opts = types.SimpleNamespace(h3_lcm_noise_first=1.6, h3_lcm_noise_last=0.7)
+        shared = types.SimpleNamespace(opts=opts)
+        with patch.dict(sys.modules, {"modules": types.SimpleNamespace(shared=shared), "modules.shared": shared}):
+            self.assertEqual(noise_settings(), (1.6, 0.7))
+            opts.h3_lcm_noise_first, opts.h3_lcm_noise_last = 9.0, "x"
+            self.assertEqual(noise_settings(), (2.0, S_NOISE_END))
 
 
 class FlowPredictor:
@@ -55,12 +75,23 @@ class SamplerTests(unittest.TestCase):
         # one model call per sigma before 0, fresh noise before every call but the first
         self.assertEqual([round(s, 4) for _, s in model.calls], [1.0, 0.75, 0.25])
         self.assertEqual(drawn, [(1.0, 0.75), (0.75, 0.25)])
-        # three steps: the scale runs 1.10, 1.00, 0.90; call 2 sees the clean estimate noised to 0.75 with noise x 1.10,
-        # call 3 to 0.25 with x 1.00
+        # three steps, two of them add noise: the scale runs 1.10 then 0.90; call 2 sees the clean estimate noised to
+        # 0.75 with noise x 1.10, call 3 to 0.25 with x 0.90
         torch.testing.assert_close(model.calls[1][0], 0.75 * 1.10 * noise + 0.25 * clean)
-        torch.testing.assert_close(model.calls[2][0], 0.25 * 1.00 * noise + 0.75 * clean)
+        torch.testing.assert_close(model.calls[2][0], 0.25 * 0.90 * noise + 0.75 * clean)
         # the last step to 0 returns the clean estimate as it is
         torch.testing.assert_close(out, clean)
+
+    def test_explicit_scales_override_the_settings(self):
+        from forge_h3.sampler import sample_h3_image_lcm
+
+        clean = torch.zeros(1, 1, 2, 2)
+        noise = torch.ones_like(clean)
+        model = FakeModel(clean)
+        sample_h3_image_lcm(model, clean, torch.tensor([1.0, 0.5, 0.25, 0.0]), noise_sampler=lambda *_: noise,
+                            s_noise=2.0, s_noise_end=0.5)
+        torch.testing.assert_close(model.calls[1][0], 0.5 * 2.0 * noise)
+        torch.testing.assert_close(model.calls[2][0], 0.25 * 0.5 * noise)
 
     def test_the_callback_sees_every_step(self):
         from forge_h3.sampler import sample_h3_image_lcm

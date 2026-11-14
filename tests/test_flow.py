@@ -459,6 +459,28 @@ class FlowTests(unittest.TestCase):
         with self.assertRaisesRegex(H3Error, "Add an input image"):
             self.engine.encode_first_stage(torch.zeros(1, 3, HEIGHT, WIDTH))
 
+    def test_lcm_noise_settings_reach_the_infotext_only_off_their_defaults(self):
+        opts = sys.modules["modules.shared"].opts
+        p = Txt2Img()
+        p.sampler_name = "H3-Image LCM"
+        self.run_until_sampling(p)
+        self.assertNotIn("H3 LCM noise first", p.extra_generation_params)
+        integration.postprocess(p, None)
+        opts.h3_lcm_noise_first, opts.h3_lcm_noise_last = 1.5, 1.5
+        self.addCleanup(lambda: [delattr(opts, name) for name in ("h3_lcm_noise_first", "h3_lcm_noise_last")])
+        p = Txt2Img()
+        p.sampler_name = "H3-Image LCM"
+        self.run_until_sampling(p)
+        self.assertEqual((p.extra_generation_params["H3 LCM noise first"], p.extra_generation_params["H3 LCM noise last"]),
+                         ("1.5", "1.5"))
+        integration.postprocess(p, None)
+        # another sampler does not use them
+        p = Txt2Img()
+        p.sampler_name = "Euler a"
+        self.run_until_sampling(p)
+        self.assertNotIn("H3 LCM noise first", p.extra_generation_params)
+        integration.postprocess(p, None)
+
     def test_output_scale_shrinks_the_decoded_picture_with_an_area_filter(self):
         sys.modules["modules.shared"].opts.h3_output_scale = "1/2"
         p = Txt2Img()

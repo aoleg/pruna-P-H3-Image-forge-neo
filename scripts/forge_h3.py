@@ -10,7 +10,7 @@ if ROOT not in sys.path:
 
 from modules import script_callbacks, scripts, shared
 
-from forge_h3 import integration, ui
+from forge_h3 import integration, sampler, ui
 from forge_h3.native import compat
 
 ENABLED = False
@@ -82,6 +82,18 @@ def settings():
                                  "lower below 16 MP and higher above, as Krea 2 and Flux move their shift; 0 keeps "
                                  "MiniMax's fixed grid, 0.5 is SD3's rule (at 4 MP the shift halves); no gain on the "
                                  "stock checkpoint in tests, more grit with Euler at 4 MP"))
+    low, high = sampler.S_NOISE_RANGE
+    noise_slider = {"minimum": low, "maximum": high, "step": 0.1}
+    shared.opts.add_option(sampler.S_NOISE_START_SETTING,
+                           shared.OptionInfo(sampler.S_NOISE_START, "[H3] LCM noise, first step", gr.Slider, noise_slider,
+                                             section=section, infotext=sampler.S_NOISE_START_INFOTEXT)
+                           .info("H3-Image LCM: the fresh noise added after the first step, as a multiple of the step's "
+                                 "sigma; above 1 adds fine detail, below 1 smooths"))
+    shared.opts.add_option(sampler.S_NOISE_END_SETTING,
+                           shared.OptionInfo(sampler.S_NOISE_END, "[H3] LCM noise, last step", gr.Slider, noise_slider,
+                                             section=section, infotext=sampler.S_NOISE_END_INFOTEXT)
+                           .info("H3-Image LCM: the same at the last step that adds noise; the steps between run "
+                                 "linearly from first to last. Set both alike for a flat s_noise"))
 
 
 script_callbacks.on_ui_settings(settings)
