@@ -135,15 +135,18 @@ def _replace(sd: dict, prefix: str, asd: dict) -> None:
 def _hook_replace_state_dict() -> None:
     original = loader.replace_state_dict
 
-    def replace_state_dict(sd: dict, asd: dict, guess, path):
+    def replace_state_dict(sd: dict, asd: dict, *args, **kwargs):
+        # Forge Neo passes (sd, asd, guess, path), and since 6017d53d (2026-11-14) (sd, asd, metadata, guess, path):
+        # guess is the second argument from the end in both
+        guess = kwargs["guess"] if "guess" in kwargs else (args[-2] if len(args) >= 2 else None)
         if not isinstance(guess, model.MiniMaxH3):
-            return original(sd, asd, guess, path)
+            return original(sd, asd, *args, **kwargs)
         if _is_h3_text_encoder(asd):
             _replace(sd, f"{guess.text_encoder_key_prefix[0]}{TE_PREFIX}", asd)
         elif vae.is_h3_vae(asd):
             _replace(sd, guess.vae_key_prefix[0], vae.with_latent_stats(asd))
         else:
-            return original(sd, asd, guess, path)
+            return original(sd, asd, *args, **kwargs)
         return sd
 
     loader.replace_state_dict = replace_state_dict
