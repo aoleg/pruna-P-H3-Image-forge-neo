@@ -6,6 +6,7 @@ norm). With pictures each one comes first as "<Picture i>: " + a vision block, t
 is tokenized on its own, as ComfyUI does.
 """
 
+import torch
 from backend.args import dynamic_args
 from backend.text_processing import emphasis
 from backend.text_processing._comfy import EMBEDDINGS, INF, SDClipModel, SDTokenizer
@@ -57,7 +58,10 @@ class MiniMaxH3TextEngine:
     def tokenize(self, texts: str | list[str]) -> EMBEDDINGS | list[EMBEDDINGS]:
         return self.tokenizer.tokenizer(texts, add_special_tokens=False)["input_ids"]
 
-    def __call__(self, texts: list[str], images: list = (), picture_label: str = PICTURE_LABEL) -> list:
+    def __call__(self, texts: list[str], images: list = (), picture_label: str = PICTURE_LABEL,
+                 plain_too: bool = False) -> list:
+        """plain_too (with images): each prompt is also encoded without the pictures, and the plain states follow the
+        with-picture ones in the same tensor (blank_reference.blank_split separates them in the DiT)."""
         if any(emphasis.uses_emphasis(text) for text in texts):
             dynamic_args.last_extra_generation_params["Emphasis"] = "None"
 
@@ -66,8 +70,12 @@ class MiniMaxH3TextEngine:
         self.vision_spans = []
         for line in texts:
             if line not in cache:
-                cache[line] = self.text_encoder.encode_token_weights(self.tokens(line, images, picture_label))[0]
+                z = self.text_encoder.encode_token_weights(self.tokens(line, images, picture_label))[0]
                 self.vision_spans = vision_spans(self.text_encoder.image_spans)
+                if plain_too and images:
+                    plain = self.text_encoder.encode_token_weights(self.tokens(line))[0]
+                    z = torch.cat([z, plain.to(device=z.device, dtype=z.dtype)], dim=-2)
+                cache[line] = z
             zs.extend(cache[line])  # (L, D) per prompt; the prompt parser stacks the batch
         return zs
 

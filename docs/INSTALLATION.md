@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.16.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.17.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -81,6 +81,8 @@ Files are recognized by their tensor layout, not by their name.
 **Settings → MiniMax H3 → [H3] Fused kernels** (on by default) runs the DiT block's norms and SwiGLU on comfy-kitchen's fused kernels; turn it off to compare with the previous path. The console prints `fused comfy-kitchen kernels: on` or `off` with the reason.
 
 **Settings → MiniMax H3 → [H3] Resolution shift** (0 by default, experimental) moves MiniMax-H3-Image's sigma grid with the picture size. It gave no gain on the stock checkpoint, so leave it at 0. Restart Forge after an update, because the H3 schedules are registered at startup. See the README.
+
+**Blank reference** in the MiniMax H3 panel (off by default, experimental, MiniMax-H3-Image only) gives the model a black picture as an edit's `<Picture 1>`, for every step or for a range of the denoising set with its from and to sliders. See the README.
 
 **Settings → MiniMax H3 → [H3] Enable Reference** is on by default: img2img is an edit, with MiniMax-H3-Image or P-H3-Image. Off, img2img is Forge's standard one with either model: the input image is encoded and noised at Denoising strength. The H3-Image schedules stop at sigma 0.42 or above, so with MiniMax-H3-Image even a low Denoising strength starts from a heavily noised picture.
 

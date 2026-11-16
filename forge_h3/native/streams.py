@@ -77,3 +77,6 @@ class Generation:
     vision_spans: list = field(default_factory=list)
     frame: torch.Tensor | None = None  # [1, 3, H, W] float in [0, 1], after decoding
     memory_reported: bool = False      # the first sampling step printed its working memory
+    # a blank reference for part of the denoising: (sigma_from, sigma_to), the conditioning then carries both prompts
+    # (blank_reference.py); None when the references apply to every step
+    blank: tuple[float, float] | None = None

@@ -42,13 +42,15 @@ class Script(scripts.Script):
 
     def ui(self, is_img2img):
         self.panel = ui.Panel(is_img2img)
+        self.infotext_fields = self.panel.infotext_fields
         return self.panel.inputs
 
     def before_process(self, p, *args):
         integration.script_before_process(p)
 
     def process(self, p, *args):
-        integration.process(p)
+        # the panel's inputs (ui.Panel.inputs); an API call without them gets the defaults
+        integration.process(p, *args[:3])
 
     def process_before_every_sampling(self, p, *args, **kwargs):
         integration.before_sampling(p, kwargs["noise"])

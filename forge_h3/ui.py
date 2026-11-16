@@ -5,6 +5,7 @@ import logging
 
 import gradio as gr
 
+from . import blank_reference
 from .contracts import H3Error
 from .integration import checkpoint_info
 from .models import ROLE_LABELS, inspect_model
@@ -50,14 +51,44 @@ class Panel:
                             "noised at Denoising strength, with either model.")
             with gr.Accordion("Components", open=False):
                 self.summary = gr.Markdown("")
+            # no gr.Group (or anything else that renders a .styler) inside the panel: sd-webui-tabs-extension takes a
+            # script block with one for an extension and hides it behind a tab named after the first inner accordion
+            self.blank = gr.Checkbox(False, label="Blank reference", elem_id=f"{self.tab}_h3_blank",
+                                     info="a black picture as an edit's <Picture 1>, without editing anything: denser "
+                                          "colour and less pixel-level grit at 16 MP, and a different composition. "
+                                          "Not used in an img2img edit, which has its own pictures.")
+            self.blank_from = gr.Slider(0, 100, value=0, step=1, label="Blank reference from (% of denoising)",
+                                        elem_id=f"{self.tab}_h3_blank_from", visible=False,
+                                        info="each sixth is one of MiniMax-H3-Image's six steps: 33 starts at the "
+                                             "third, 50 at the fourth; the plain prompt shapes the steps before")
+            self.blank_to = gr.Slider(0, 100, value=100, step=1, label="Blank reference to (% of denoising)",
+                                      elem_id=f"{self.tab}_h3_blank_to", visible=False)
+            self.blank_controls = [self.blank_from, self.blank_to]
+            if _in_blocks():
+                self.blank.change(self.show_blank, inputs=[self.blank], outputs=self.blank_controls, queue=False,
+                                  show_progress=False)
         self.bound = False
         self.attempts = []
         PANELS.append(self)
 
+    def show_blank(self, on):
+        # Gradio takes one update per output, as a list for several
+        return [gr.update(visible=bool(on)) for _ in self.blank_controls]
+
     @property
     def inputs(self):
-        # the panel has no generation inputs of its own
-        return []
+        # the script's args, in integration.process's order
+        return [self.blank, self.blank_from, self.blank_to]
+
+    @property
+    def infotext_fields(self):
+        # a pasted infotext with "H3 Blank reference: 33-100%" ticks the box and sets the sliders
+        def bound(d, index, default):
+            window = blank_reference.parse(d.get(blank_reference.INFOTEXT))
+            return default if window is None else (window.start, window.end)[index]
+        return [(self.blank, lambda d: blank_reference.parse(d.get(blank_reference.INFOTEXT)) is not None),
+                (self.blank_from, lambda d: bound(d, 0, 0.0)),
+                (self.blank_to, lambda d: bound(d, 1, 100.0))]
 
     @property
     def needed(self):

@@ -7,7 +7,7 @@ request, give the sampler the packed video+audio noise of one still image, and l
 from fractions import Fraction
 from pathlib import Path
 
-from . import pictures
+from . import blank_reference, pictures
 from .contracts import GenerationRequest, H3Error, set_pending_error
 from .models import inspect_model, resolve_components
 from .resolution_shift import odds_factor
@@ -200,7 +200,9 @@ def _before_process(p):
     print(f"[MiniMax H3] {profile.label}{experimental}: still image at {request.width}x{request.height}{detail}")
 
 
-def process(p):
+def process(p, blank=False, blank_from=0.0, blank_to=100.0):
+    """blank, blank_from, blank_to: the H3 panel's Blank reference box and its from / to sliders (percent of the
+    denoising)."""
     request = getattr(p, "h3_request", None)
     if request is None:
         return
@@ -209,12 +211,26 @@ def process(p):
     from modules import shared
 
     engine = p.sd_model
+    profile = p.h3_components.profile
     refs = getattr(p, "h3_references", [])
+    vision = getattr(p, "h3_vision", None) if refs else None
+    window = blank_reference.window(blank, blank_from, blank_to)
+    if window is not None and refs:
+        print("[MiniMax H3] Blank reference is off for an edit: its pictures are the references")
+        window = None
+    if window is not None and profile.name != pictures.H3_IMAGE_PROFILE:
+        # P-H3-Image sizes an edit's pictures at the generated size: a blank one would double every step's sequence
+        print(f"[MiniMax H3] Blank reference is for MiniMax-H3-Image; it is off for {profile.label}")
+        window = None
+    if window is not None:
+        # a black <Picture 1>, sized as the model's edit sizes any picture (blank_reference.py)
+        refs, vision = pictures.edit_inputs(profile, [blank_reference.blank_picture()], p.width, p.height)
+        p.extra_generation_params[blank_reference.INFOTEXT] = window.label()
     # Forge caches the conditioning by prompt, which knows nothing of the pictures before it
     if refs or engine.condition_images():
         p.clear_prompt_cache()
-    profile = p.h3_components.profile
-    engine.set_references(refs, getattr(p, "h3_vision", None) if refs else None, profile.picture_label)
+    engine.set_references(refs, vision, profile.picture_label)
+    engine.set_blank_window(window)
     engine.set_img2img(getattr(p, "h3_standard_img2img", False))
     scale_label, scale = output_scale()
     engine.set_output_scale(scale)

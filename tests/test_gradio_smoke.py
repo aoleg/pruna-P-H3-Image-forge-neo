@@ -47,16 +47,30 @@ class GradioSmoke(unittest.TestCase):
         self.assertEqual(len({id(fn.fn) for fn in demo.fns.values()
                               if getattr(fn.fn, "__name__", "") == "update"}), 2)
 
-    def test_the_panel_has_no_generation_inputs(self):
+    def test_the_panel_passes_its_blank_reference_and_shows_the_sliders_with_it(self):
         import gradio as gr
 
         from forge_h3 import ui
         ui.reset()
         self.addCleanup(ui.reset)
         for is_img2img in (False, True):
-            with gr.Blocks():
+            with gr.Blocks() as demo:
                 panel = ui.Panel(is_img2img)
-            self.assertEqual(panel.inputs, [])
+            self.assertEqual(panel.inputs, [panel.blank, panel.blank_from, panel.blank_to])
+            self.assertEqual((panel.blank.value, panel.blank_from.value, panel.blank_to.value), (False, 0, 100))
+            self.assertFalse(panel.blank_from.visible or panel.blank_to.visible)
+            toggle = [fn for fn in demo.fns.values() if panel.blank_from in fn.outputs]
+            self.assertEqual(len(toggle), 1)
+            self.assertEqual([u["visible"] for u in toggle[0].fn(True)], [True, True])
+            self.assertEqual([u["visible"] for u in toggle[0].fn(False)], [False, False])
+            # nothing in the panel may render a .styler (a gr.Group): sd-webui-tabs-extension would hide the panel
+            self.assertFalse(any(isinstance(block, gr.Group) for block in demo.blocks.values()))
+            # a pasted infotext ticks the box and sets the sliders
+            (box, ticked), (start, start_value), (end, end_value) = panel.infotext_fields
+            self.assertEqual((box, start, end), (panel.blank, panel.blank_from, panel.blank_to))
+            pasted = {"H3 Blank reference": "33-100%"}
+            self.assertEqual((ticked(pasted), start_value(pasted), end_value(pasted)), (True, 33.0, 100.0))
+            self.assertEqual((ticked({}), start_value({}), end_value({})), (False, 0.0, 100.0))
 
     def test_real_blocks_build_and_model_switching(self):
         import gradio as gr

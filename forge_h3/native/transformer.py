@@ -13,6 +13,8 @@ pictures | image], with a bank of output heads distilled on the checkpoint's own
 import torch
 import torch.nn as nn
 
+from ..blank_reference import active as blank_active
+from ..blank_reference import blank_split
 from ..contracts import raise_pending_error
 from . import kernels, lora
 from .dit import (
@@ -167,13 +169,24 @@ class MiniMaxH3Model(nn.Module):
             raise RuntimeError("[MiniMax H3] the H3 settings were not applied to this generation; "
                                "check the console for an earlier MiniMax H3 message")
         shapes = generation.shapes
+        refs, spans = generation.refs, generation.vision_spans
+        blank = getattr(generation, "blank", None)
+        if blank is not None:
+            # a blank reference for part of the denoising: the conditioning carries the with-picture prompt, then the
+            # plain one; this step's sigma picks one, with or without the reference rows (blank_reference.py)
+            with_len, _ = blank_split(context.shape[1], spans[-1][1] if spans else 0)
+            if blank_active(float(timestep.flatten()[0]) / 1000.0, *blank):
+                context = context[:, :with_len]
+            else:
+                context = context[:, with_len:]
+                refs, spans = [], []
         text_len = context.shape[1]
         # as ComfyUI's model_base.MiniMaxH3.extra_conds: the reference latents ride as condition rows, never denoised
-        payload = {"seed": generation.seed, "layout": self._layout(text_len, shapes, generation.refs)}
-        if generation.refs:
-            payload["refs"] = generation.refs
-            payload["cond_video_latents"] = [r["latent"] for r in generation.refs]
-        tags = text_token_tags(text_len, generation.vision_spans)
+        payload = {"seed": generation.seed, "layout": self._layout(text_len, shapes, refs)}
+        if refs:
+            payload["refs"] = refs
+            payload["cond_video_latents"] = [r["latent"] for r in refs]
+        tags = text_token_tags(text_len, spans)
         if tags is not None:
             payload["text_token_tags"] = tags
         # a PDD head bank picks its heads from the sampler's schedule (Forge keeps it under sampling_sigmas)

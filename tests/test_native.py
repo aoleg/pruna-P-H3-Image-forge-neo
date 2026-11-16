@@ -220,6 +220,26 @@ class ForwardTests(unittest.TestCase):
                 self.assertTrue(all(torch.isfinite(o).all() for o in raw))
                 self.assertTrue(all(torch.allclose(a, b, atol=1e-5) for a, b in zip(raw, refined)))
 
+    def test_a_blank_window_picks_the_prompt_and_references_by_sigma(self):
+        from forge_h3.native.streams import Generation, StreamShapes
+        with torch.inference_mode():
+            model = tiny_dit(17)
+            shapes = StreamShapes(video=(1, 24, 1, 6, 10), audio=(1, 32, 2, 2))
+            refs = [{"kind": "image", "latent_h": 4, "latent_w": 4, "latent": torch.randn(1, 24, 1, 4, 4)}]
+            spans = [(0, 3)]
+            x = shapes.pack(torch.randn(shapes.video), torch.randn(shapes.audio))
+            # a 3-token picture prefix and 4 prompt tokens, then the same 4 prompt tokens encoded without the picture
+            with_picture, plain = torch.randn(1, 7, 48), torch.randn(1, 4, 48)
+            both = torch.cat([with_picture, plain], dim=1)
+            # the window: sigma 0.75 and below, as "from 50%" on the grid
+            model.generation = Generation(shapes=shapes, seed=1, refs=refs, vision_spans=spans, blank=(0.75, 0.0))
+            inside = model(x, torch.tensor([700.0]), both)
+            outside = model(x, torch.tensor([900.0]), both)
+            model.generation = Generation(shapes=shapes, seed=1, refs=refs, vision_spans=spans)
+            self.assertTrue(torch.equal(inside, model(x, torch.tensor([700.0]), with_picture)))
+            model.generation = Generation(shapes=shapes, seed=1)
+            self.assertTrue(torch.equal(outside, model(x, torch.tensor([900.0]), plain)))
+
     def test_packed_forward_matches_the_stream_forward(self):
         from forge_h3.native.streams import Generation, StreamShapes
         with torch.inference_mode():

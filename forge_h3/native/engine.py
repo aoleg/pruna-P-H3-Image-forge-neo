@@ -155,6 +155,12 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         self.vision_pictures = [vision_copy(image) for image in self.references] if vision is None else list(vision)
         self.picture_label = picture_label
 
+    def set_blank_window(self, window) -> None:
+        """Called by the script for every generation, after set_references: a blank_reference.Window when a blank
+        reference applies to part of the denoising only, else None. The prompt is then also encoded without the
+        picture, and each step picks one of the two."""
+        self.blank_window = window if window is not None and not window.full else None
+
     def set_img2img(self, standard: bool) -> None:
         """Called by the script for every generation: whether Forge's img2img input image starts the sampling."""
         self.img2img_input = bool(standard)
@@ -194,8 +200,15 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         # each reference on its own grid (ComfyUI MiniMaxH3ReferenceToVideo's ref_blocks)
         refs = [{"kind": "image", "latent_h": image.shape[1] // 16, "latent_w": image.shape[2] // 16, "latent": latent}
                 for image, latent in zip(self.references, self._encode_images(self.references))]
+        blank = None
+        window = getattr(self, "blank_window", None)
+        if window is not None and refs:
+            from ..blank_reference import thresholds
+            # the model's own noise levels (MiniMax-H3-Image's grid, P-H3-Image's shifted flow); plain flow otherwise
+            predictor = getattr(self.forge_objects.unet.model, "predictor", None)
+            blank = thresholds(window, getattr(predictor, "percent_to_sigma", lambda percent: 1.0 - percent))
         self.generation = Generation(shapes=shapes, seed=seed, refs=refs,
-                                     vision_spans=list(self.text_processing_engine_h3.vision_spans))
+                                     vision_spans=list(self.text_processing_engine_h3.vision_spans), blank=blank)
         self.forge_objects.unet.model.diffusion_model.generation = self.generation
         self._reserve_working_memory()
         return (1, 1, shapes.size)
@@ -240,7 +253,8 @@ class MiniMaxH3Engine(ForgeDiffusionEngine):
         pictures = [tuple(image.shape[-3:-1]) for image in images]
         memory_management.load_models_gpu([self.forge_objects.clip.patcher], memory_required=prompt_memory(pictures))
         # the same pictures for the prompt and the negative prompt: they come before either text
-        return self.text_processing_engine_h3(prompt, images=images, picture_label=getattr(self, "picture_label", PICTURE_LABEL))
+        return self.text_processing_engine_h3(prompt, images=images, picture_label=getattr(self, "picture_label", PICTURE_LABEL),
+                                              plain_too=getattr(self, "blank_window", None) is not None and bool(images))
 
     @torch.inference_mode()
     def get_prompt_lengths_on_ui(self, prompt: str) -> tuple[int, int]:

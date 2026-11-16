@@ -88,10 +88,11 @@ class FakeTextEngine:
     def __init__(self):
         self.images, self.vision_spans, self.picture_label = [], [], None
 
-    def __call__(self, texts, images=(), picture_label=None):
-        self.images, self.picture_label = list(images), picture_label
+    def __call__(self, texts, images=(), picture_label=None, plain_too=False):
+        self.images, self.picture_label, self.plain_too = list(images), picture_label, plain_too
         self.vision_spans = [(0, 3)] if images else []
-        return [torch.randn(7, 48) for _ in texts]
+        # with plain_too the 4 prompt tokens follow again without the 3-token picture prefix (7 + 4)
+        return [torch.randn(11 if plain_too and images else 7, 48) for _ in texts]
 
 
 def forge_modules(files):
@@ -168,11 +169,12 @@ class FlowTests(unittest.TestCase):
         sys.modules["modules.shared"].opts.forge_additional_modules = [str(f) for f in files]
         sys.modules["modules.shared"].opts.forge_preset = preset
 
-    def run_until_sampling(self, p):
-        """before_process .. process_before_every_sampling, as Forge calls them; returns the conditioning."""
+    def run_until_sampling(self, p, *script_args):
+        """before_process .. process_before_every_sampling, as Forge calls them (script_args: the panel's inputs);
+        returns the conditioning."""
         integration.before_process(p)
         p.sd_model = self.engine
-        integration.process(p)
+        integration.process(p, *script_args)
         if isinstance(p, Img2Img):
             # images_tensor_to_samples: the input image, already resized by Forge, in [-1, 1]
             p.init_latent = self.engine.encode_first_stage(torch.full((1, 3, p.height, p.width), 0.25) * 2 - 1)
@@ -479,6 +481,56 @@ class FlowTests(unittest.TestCase):
         p.sampler_name = "Euler a"
         self.run_until_sampling(p)
         self.assertNotIn("H3 LCM noise first", p.extra_generation_params)
+        integration.postprocess(p, None)
+
+    def test_a_blank_reference_is_a_black_picture_one_for_its_window(self):
+        self.use_h3_image()
+        p = Txt2Img()
+        cond = self.run_until_sampling(p, True, 33, 100)
+        engine, text = self.engine, self.engine.text_processing_engine_h3
+        # one black picture: the text encoder sees it, and the DiT gets its latent as a reference
+        self.assertEqual(len(text.images), 1)
+        self.assertEqual(float(text.images[0].max()), 0.0)
+        self.assertEqual(len(engine.generation.refs), 1)
+        self.assertEqual(p.extra_generation_params["H3 Blank reference"], "33-100%")
+        self.assertNotIn("H3 Edit pictures", p.extra_generation_params)
+        # part of the denoising: both prompts in one conditioning, and the sigma window on the generation
+        self.assertTrue(text.plain_too)
+        self.assertEqual(cond[0].shape[0], 11)
+        sigma_from, sigma_to = engine.generation.blank
+        self.assertEqual(sigma_to, 0.0)
+        self.assertAlmostEqual(sigma_from, 1 - 0.325)
+        # the DiT runs on either side of the window: the plain prompt alone, then the picture and its reference rows
+        dit = engine.forge_objects.unet.model.diffusion_model
+        sigmas = torch.tensor(dit.pdd_sigmas)
+        for sigma in (0.9675, 0.5328):
+            out = dit(p.modified_noise, torch.tensor([sigma * 1000]), cond[0].unsqueeze(0), {"sampling_sigmas": sigmas})
+            self.assertTrue(torch.isfinite(out).all())
+        kinds = sorted(tuple(k for _, _, k in layout.segments) for layout in dit._layouts.values())
+        self.assertEqual(kinds, [("text", "ref_img", "video"), ("text", "video")])
+        integration.postprocess(p, None)
+        # the whole denoising is a plain edit with the black picture: one prompt, no window
+        p = Txt2Img()
+        cond = self.run_until_sampling(p, True, 0, 100)
+        self.assertFalse(text.plain_too)
+        self.assertEqual(cond[0].shape[0], 7)
+        self.assertIsNone(self.engine.generation.blank)
+        self.assertEqual(len(self.engine.generation.refs), 1)
+        integration.postprocess(p, None)
+        # off: no picture at all
+        p = Txt2Img()
+        self.run_until_sampling(p, False, 33, 100)
+        self.assertEqual((text.images, self.engine.generation.refs), ([], []))
+        self.assertNotIn("H3 Blank reference", p.extra_generation_params)
+        integration.postprocess(p, None)
+
+    def test_p_h3_image_keeps_no_blank_reference(self):
+        # P-H3-Image sizes an edit's pictures at the generated size: a blank one would double the sequence
+        p = Txt2Img()
+        self.run_until_sampling(p, True, 33, 100)
+        self.assertEqual(p.h3_components.profile.name, "ph3")
+        self.assertEqual(self.engine.generation.refs, [])
+        self.assertNotIn("H3 Blank reference", p.extra_generation_params)
         integration.postprocess(p, None)
 
     def test_output_scale_shrinks_the_decoded_picture_with_an_area_filter(self):
