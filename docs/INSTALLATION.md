@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-Version 0.17.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
+Version 0.18.0. The H3 architecture runs on Forge Neo's own loader, samplers and memory management; the extension installs no Python package. See the [README](../README.md) for the short version.
 
 ## Requirements
 
@@ -108,6 +108,7 @@ With the setting on, the input image is `<Picture 1>`; **ImageStitch Integrated*
 | `H3 width and height must be multiples of 32` | Use multiples of 32, at least 64. |
 | `H3 generates one picture at a time` | Set Batch Size to 1 and use Batch Count. |
 | `The img2img input image did not reach H3` | Set **Settings → VAE → VAE for Encoding** to **Full**. |
+| `taeh3 preview unavailable, using the RGB preview` | The TAESD live preview could not download or read `models/VAE-taesd/taeh3.safetensors`. Check the connection, or download the file from madebyollin/taehv (`safetensors/taeh3.safetensors`) into that folder yourself. `is not madebyollin's taeh3`: another TAE has that name (Kijai's earlier one); delete it. Restart Forge to try again. |
 | The process is killed while loading or adding a LoRA | Not enough system RAM. Close other programs, restart Forge before changing the text encoder, and prefer the smaller files. |
 
 Report other errors on the [issue tracker](https://github.com/aoleg/pruna-P-H3-Image-forge-neo/issues) with the console output.
@@ -126,4 +127,5 @@ The native backend tests need Torch and comfy-kitchen; Gradio is optional. They 
 - ComfyUI `0228a9d` (10 November 2026): `comfy/ldm/minimax/` (`MiniMaxH3ImageModel`, `sampling.py`, the image VAEs), `comfy/text_encoders/minimax.py`, `comfy_extras/nodes_minimax_h3.py` (`MiniMaxH3ImageConditioning`, `PH3ImageConditioning`), `comfy/sd.py`; P-H3-Image was ported from `5f415e3`, the original video port followed `e9027f2`.
 - Forge Neo `286a244e` (import and registration), `97b26fb` and `d70373e` (the video extension's GPU tests and source reading).
 - PrunaAI/P-H3-Image-Comfy, `main` as of 4 November 2026, for the tensor layouts and recipes.
+- madebyollin/taehv `62f7591` (MIT): the taeh3 decoder (`taehv.py`) and the file the TAESD live preview downloads (`safetensors/taeh3.safetensors`). ComfyUI's `comfy/taesd/taehv.py` and `latent_preview.py` (master, 16 November 2026) for the frame it previews.
 - Comfy-Org/MiniMax-H3-Image and MiniMaxAI/MiniMax-H3-Image, `main` as of 11 November 2026.

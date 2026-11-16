@@ -20,7 +20,7 @@ from backend.state_dict import load_state_dict
 from huggingface_guess import detection, model_list
 from transformers.modeling_utils import no_init_weights
 
-from . import cuda_errors, filebacked, gguf_vision, model, release, vae
+from . import cuda_errors, filebacked, gguf_vision, model, release, taeh3, vae
 from .engine import MiniMaxH3Engine
 from .image_vae import H3ImageVAE, MiniMaxH3ImageVAE, PH3ImageVAE
 from .islands import floating_dtype, fp32_islands, restore_fp32
@@ -278,14 +278,27 @@ def _hook_unload() -> None:
 
 
 def _hook_taesd() -> None:
-    # Forge's TAESD live preview asks decoder_model() for a decoder; H3's packed latent has none, so Forge falls back
-    # to its RGB preview (the latent_rgb_factors of model.py, on the picture's latent frame)
-    from modules import sd_vae_taesd, shared
+    # Forge's TAESD live preview asks decoder_model() for a decoder; for H3 that is madebyollin's taeh3 (taeh3.py),
+    # downloaded once into models/VAE-taesd with Forge's own downloader. Only the TAESD Live Preview Method reaches
+    # it; without the file Forge's RGB preview stays (the latent_rgb_factors of model.py, on the picture's frame)
+    from modules import devices, paths_internal, sd_vae_approx, sd_vae_taesd, shared
     original = sd_vae_taesd.decoder_model
+
+    def shapes():
+        generation = getattr(shared.sd_model, "generation", None)
+        return generation.shapes if generation is not None else None
+
+    def rgb(sample):
+        # Forge's TAESD path takes [0, 1] pixels; its RGB approximation gives [-1, 1]
+        return (sd_vae_approx.cheap_approximation(sample) + 1) / 2
+
+    source = taeh3.PreviewSource(
+        paths_internal.models_path, sd_vae_taesd.download_model,
+        lambda path: taeh3.load(path, shapes, rgb, devices.device, devices.dtype), logger.warning)
 
     def decoder_model():
         if getattr(shared.sd_model, "is_h3", False):
-            return None
+            return source.get()
         return original()
 
     sd_vae_taesd.decoder_model = decoder_model

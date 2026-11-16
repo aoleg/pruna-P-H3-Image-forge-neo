@@ -213,6 +213,10 @@ In seven same-seed pairs at 16 MP (RTX 5090, INT8 checkpoint), the pictures with
 
 The infotext records the range as "H3 Blank reference", and pasting it sets the panel back. The option is for MiniMax-H3-Image only. P-H3-Image sizes an edit's pictures at the generated size, so a blank one would double every step. An img2img edit keeps its own pictures and ignores the option. The partial range has not been tested on a GPU yet.
 
+### Live preview
+
+**Settings → Live Previews → Live Preview Method** works as for any other model. **RGB** (Forge's default) shows a small, blurry picture, one pixel per 16×16 block. **TAESD** shows the picture at full detail with madebyollin's [taeh3](https://github.com/madebyollin/taehv), a tiny decoder made for H3's latents. ComfyUI uses the same decoder for its MiniMax-H3-Image previews, and the extension shows the same frame. Previews larger than 2048 pixels on the long side are shrunk to 2048, because Forge converts and sends each preview to the browser. The first preview with TAESD downloads `taeh3.safetensors` (22.7 MB) into Forge's `models/VAE-taesd` folder. If the download fails, the console says so once and the RGB preview stays. Only the preview uses taeh3: **Settings → VAE → VAE for Decoding** set to TAESD still saves the picture from the full H3 VAE. Kijai's earlier `taeh3.safetensors` from Kijai/MiniMax-H3-TAE is a different decoder: if that file is in `models/VAE-taesd`, the console says so, and deleting it lets the preview download madebyollin's. The TAESD preview has not been checked on a GPU yet.
+
 ## Editing
 
 **Settings → MiniMax H3 → [H3] Enable Reference** (on by default, like Forge's Klein and Krea 2 settings) decides what img2img does. On, it is an edit, with MiniMax-H3-Image or P-H3-Image:
@@ -261,6 +265,7 @@ The tests use the real tensor names and shapes of the published files (`tests/fi
 - **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)**: reference implementation of the models
 - **[Comfy-Org](https://huggingface.co/Comfy-Org/MiniMax-H3-Image)**: the MiniMax-H3-Image and H3 model files
 - **[Kijai](https://huggingface.co/Kijai)**: the W4A8 checkpoints
+- **[madebyollin](https://github.com/madebyollin/taehv)**: taeh3, the TAESD live preview decoder (MIT)
 - **[Merserk](https://huggingface.co/Merserk/MiniMax-H3-INT4-ConvRot)**: the INT4 text encoder
 - **[unsloth](https://huggingface.co/unsloth/MiniMax-H3-GGUF)**: GGUF checkpoints
 
