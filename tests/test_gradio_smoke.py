@@ -57,7 +57,7 @@ class GradioSmoke(unittest.TestCase):
             with gr.Blocks() as demo:
                 panel = ui.Panel(is_img2img)
             self.assertEqual(panel.inputs, [panel.blank, panel.blank_from, panel.blank_to])
-            self.assertEqual((panel.blank.value, panel.blank_from.value, panel.blank_to.value), (False, 0, 100))
+            self.assertEqual((panel.blank.value, panel.blank_from.value, panel.blank_to.value), (False, 33, 100))
             self.assertFalse(panel.blank_from.visible or panel.blank_to.visible)
             toggle = [fn for fn in demo.fns.values() if panel.blank_from in fn.outputs]
             self.assertEqual(len(toggle), 1)
@@ -70,7 +70,7 @@ class GradioSmoke(unittest.TestCase):
             self.assertEqual((box, start, end), (panel.blank, panel.blank_from, panel.blank_to))
             pasted = {"H3 Blank reference": "33-100%"}
             self.assertEqual((ticked(pasted), start_value(pasted), end_value(pasted)), (True, 33.0, 100.0))
-            self.assertEqual((ticked({}), start_value({}), end_value({})), (False, 0.0, 100.0))
+            self.assertEqual((ticked({}), start_value({}), end_value({})), (False, 33.0, 100.0))
 
     def test_real_blocks_build_and_model_switching(self):
         import gradio as gr

@@ -22,6 +22,9 @@ from dataclasses import dataclass
 BLANK_SIDE = 1024
 BLANK_COLOR = (0, 0, 0)
 SLACK = 0.5
+# the suggested range: from the third of six steps, which keeps the composition of the plain prompt (README)
+DEFAULT_START = 33.0
+DEFAULT_END = 100.0
 INFOTEXT = "H3 Blank reference"
 
 
@@ -39,7 +42,7 @@ class Window:
         return f"{self.start:g}-{self.end:g}%"
 
 
-def window(enabled, start=0.0, end=100.0) -> Window | None:
+def window(enabled, start=DEFAULT_START, end=DEFAULT_END) -> Window | None:
     """The panel's checkbox and sliders as a Window, or None when the box is off, a value is unreadable or the
     range is empty."""
     if not enabled:

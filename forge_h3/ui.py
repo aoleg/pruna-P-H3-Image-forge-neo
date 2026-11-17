@@ -57,11 +57,11 @@ class Panel:
                                      info="a black picture as an edit's <Picture 1>, without editing anything: denser "
                                           "colour and less pixel-level grit at 16 MP, and a different composition. "
                                           "Not used in an img2img edit, which has its own pictures.")
-            self.blank_from = gr.Slider(0, 100, value=0, step=1, label="Blank reference from (% of denoising)",
+            self.blank_from = gr.Slider(0, 100, value=blank_reference.DEFAULT_START, step=1, label="Blank reference from (% of denoising)",
                                         elem_id=f"{self.tab}_h3_blank_from", visible=False,
                                         info="each sixth is one of MiniMax-H3-Image's six steps: 33 starts at the "
                                              "third, 50 at the fourth; the plain prompt shapes the steps before")
-            self.blank_to = gr.Slider(0, 100, value=100, step=1, label="Blank reference to (% of denoising)",
+            self.blank_to = gr.Slider(0, 100, value=blank_reference.DEFAULT_END, step=1, label="Blank reference to (% of denoising)",
                                       elem_id=f"{self.tab}_h3_blank_to", visible=False)
             self.blank_controls = [self.blank_from, self.blank_to]
             if _in_blocks():
@@ -87,8 +87,8 @@ class Panel:
             window = blank_reference.parse(d.get(blank_reference.INFOTEXT))
             return default if window is None else (window.start, window.end)[index]
         return [(self.blank, lambda d: blank_reference.parse(d.get(blank_reference.INFOTEXT)) is not None),
-                (self.blank_from, lambda d: bound(d, 0, 0.0)),
-                (self.blank_to, lambda d: bound(d, 1, 100.0))]
+                (self.blank_from, lambda d: bound(d, 0, blank_reference.DEFAULT_START)),
+                (self.blank_to, lambda d: bound(d, 1, blank_reference.DEFAULT_END))]
 
     @property
     def needed(self):

@@ -200,7 +200,7 @@ def _before_process(p):
     print(f"[MiniMax H3] {profile.label}{experimental}: still image at {request.width}x{request.height}{detail}")
 
 
-def process(p, blank=False, blank_from=0.0, blank_to=100.0):
+def process(p, blank=False, blank_from=blank_reference.DEFAULT_START, blank_to=blank_reference.DEFAULT_END):
     """blank, blank_from, blank_to: the H3 panel's Blank reference box and its from / to sliders (percent of the
     denoising)."""
     request = getattr(p, "h3_request", None)
