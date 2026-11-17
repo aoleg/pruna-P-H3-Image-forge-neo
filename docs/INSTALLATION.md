@@ -113,15 +113,6 @@ With the setting on, the input image is `<Picture 1>`; **ImageStitch Integrated*
 
 Report other errors on the [issue tracker](https://github.com/aoleg/pruna-P-H3-Image-forge-neo/issues) with the console output.
 
-## Local tests (developers)
-
-```bash
-python -m unittest discover -s tests -v
-python -m ruff check .
-```
-
-The native backend tests need Torch and comfy-kitchen; Gradio is optional. They use the real tensor names and shapes of the published files (`tests/fixtures/h3_headers.json.gz`, no weights) and stand-ins for Forge Neo (`tests/forge_stubs.py`). They do not replace a GPU run.
-
 ## Source provenance
 
 - ComfyUI `0228a9d` (10 November 2026): `comfy/ldm/minimax/` (`MiniMaxH3ImageModel`, `sampling.py`, the image VAEs), `comfy/text_encoders/minimax.py`, `comfy_extras/nodes_minimax_h3.py` (`MiniMaxH3ImageConditioning`, `PH3ImageConditioning`), `comfy/sd.py`; P-H3-Image was ported from `5f415e3`, the original video port followed `e9027f2`.

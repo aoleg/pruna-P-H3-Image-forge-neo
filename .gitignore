@@ -7,6 +7,9 @@ outputs/
 *.pem
 *.key
 
+# Local tests: kept out of the published repository
+tests/
+
 # Python and tooling caches
 __pycache__/
 *.py[cod]

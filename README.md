@@ -249,15 +249,6 @@ Off, img2img is Forge's own with either model: the input image is encoded, noise
 - The stock MiniMax H3 checkpoint with Pruna's LoRA has not been run yet.
 - P-H3-Image's text-to-image is soft in small detail at every size tried. The sampling path matches ComfyUI's stage by stage, and the launch flags that lower precision made no difference, so the comparison left is the same prompt in ComfyUI.
 
-## Local tests (developers)
-
-```bash
-python -m unittest discover -s tests -v
-python -m ruff check .
-```
-
-The tests use the real tensor names and shapes of the published files (`tests/fixtures/h3_headers.json.gz`, no weights) and stand-ins for Forge Neo (`tests/forge_stubs.py`). They do not replace a GPU run.
-
 ## Credits
 
 - **[minimax-h3-forge-neo](https://github.com/eduardoabreu81/minimax-h3-forge-neo)** by Eduardo Abreu, the video extension this fork starts from
